@@ -1,0 +1,38 @@
+# ── Core (required to run the pipeline) ──────────────────────────────────────
+
+# Azure OpenAI SDK — must be >=1.50.0 for the Responses API (client.responses.create)
+openai>=1.50.0
+
+# .env file loading
+python-dotenv>=1.0.0
+
+# Word document loader (.docx / .doc)
+python-docx>=1.0.0
+
+# Excel loader (.xlsx / .xls / .xlsm)
+openpyxl>=3.1.0
+
+
+# ── Optional document loaders ─────────────────────────────────────────────────
+# Install these if your input folder contains .xlsb or macro-enabled .xlsm files.
+
+# Binary Excel workbook support (.xlsb)
+# pyxlsb>=1.0.9
+
+# VBA macro extraction from .xlsm and .xlsb workbooks
+# oletools>=0.60
+
+
+# ── Required to run the generated Python code ─────────────────────────────────
+# The pipeline generates two Python versions per COBOL file.
+# These packages are needed when you actually execute that generated code,
+# not when you run the transformation pipeline itself.
+
+# Used in the DB version: SQLAlchemy ORM / Core for all database operations
+sqlalchemy>=2.0.0
+
+# Used in the ETL version: pandas DataFrame for writing CSV staging files
+pandas>=2.0.0
+
+# Optional: raw ODBC connectivity for the DB version (alternative to SQLAlchemy)
+# pyodbc>=5.0.0
