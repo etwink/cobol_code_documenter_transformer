@@ -83,7 +83,7 @@ class ClusterBuilder:
     """Build document clusters from a scanned document set."""
 
     def __init__(self):
-        from src.llm_integration import AzureLLMClient
+        from llm_integration import AzureLLMClient
         self.llm = AzureLLMClient()
 
     # ------------------------------------------------------------------

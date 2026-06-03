@@ -2,8 +2,8 @@
 
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-from src.document_loaders import DocumentContent
-from src.llm_integration import AzureLLMClient, PromptBuilder
+from document_loaders import DocumentContent
+from llm_integration import AzureLLMClient, PromptBuilder
 
 
 @dataclass

@@ -15,7 +15,7 @@ For pure-doc clusters:  all files are summarized together if ≤ 5 files, or in
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .cluster_builder import DocumentCluster
+from cluster_builder import DocumentCluster
 
 
 @dataclass
@@ -34,7 +34,7 @@ class HierarchicalSummarizer:
     """Summarize each cluster into a single ClusterSummary."""
 
     def __init__(self):
-        from src.llm_integration import AzureLLMClient
+        from llm_integration import AzureLLMClient
         self.llm = AzureLLMClient()
 
     def summarize_all(
@@ -107,13 +107,21 @@ Dependency structure:
 Individual file summaries:
 {summaries_block}{shared_block}
 
-Write a cohesive subsystem summary ({lower}–{upper} words) covering:
-1. Business purpose of this subsystem
-2. Overall processing flow (entry → processing → output)
-3. Key data structures and copybooks used
-4. External systems or files accessed
-5. Important business rules or decision points
-6. Error handling approach
+Write a cohesive subsystem summary ({lower}–{upper} words) that serves TWO audiences:
+  • Product owners who need to understand the business purpose and outcomes
+  • Developers who need to understand the technical implementation
+
+For each major topic, cover both perspectives using this format:
+  Business: [plain English — what it does, what rule it enforces, what outcome it produces]
+  Technical: [implementation detail — data structures, programs, call chains, file/DB access]
+
+Cover:
+1. Business purpose: what problem this subsystem solves and why it exists
+2. Overall processing flow (entry → processing → output) — business narrative and technical steps
+3. Key data structures, copybooks, and working-storage areas used
+4. External systems, files, and databases accessed — business meaning and technical names
+5. Important business rules and decision points — the rule itself and how the code enforces it
+6. Error handling: business impact of errors and the technical approach to handling them
 
 Be specific to the actual code described above."""
         return self.llm.query(prompt, max_tokens=4000)
@@ -194,14 +202,22 @@ COBOL Code Summaries:
 Business Documentation Summaries:
 {doc_block}{shared_block}
 
-Write a unified subsystem summary ({lower}–{upper} words) that integrates both the technical implementation and the business intent:
-1. Business purpose and stakeholders
-2. How the COBOL code implements the documented business rules
-3. End-to-end processing flow
-4. Data inputs, transformations, and outputs
-5. Key decision points and business rules
-6. Gaps or discrepancies between the documentation and the code
-7. Error handling and exception paths"""
+Write a unified subsystem summary ({lower}–{upper} words) that serves TWO audiences:
+  • Product owners who need to understand the business purpose, rules, and outcomes
+  • Developers who need to understand how the code implements those rules
+
+For each major topic, cover both perspectives using this format:
+  Business: [plain English — purpose, rule, stakeholder impact, or outcome]
+  Technical: [implementation — code structure, data flow, libraries, call chains]
+
+Cover:
+1. Business purpose and stakeholders: who uses this, what business need it meets
+2. How the COBOL code implements the documented business rules — alignment and gaps
+3. End-to-end processing flow: business narrative and the technical steps that execute it
+4. Data inputs, transformations, and outputs — business meaning and technical structures
+5. Key decision points and business rules — the rule itself and how the code enforces it
+6. Gaps or discrepancies between the documentation and the actual code behavior
+7. Error handling: business impact of errors and the technical exception paths"""
         return self.llm.query(prompt, max_tokens=5000)
 
     # ------------------------------------------------------------------
@@ -373,7 +389,7 @@ Write a unified subsystem summary ({lower}–{upper} words) that integrates both
 
 def _load_doc(path: Path):
     try:
-        from src.document_loaders import get_loader
+        from document_loaders import get_loader
         loader = get_loader(path)
         return loader.load()
     except Exception:

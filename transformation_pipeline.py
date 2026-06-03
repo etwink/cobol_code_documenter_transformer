@@ -156,6 +156,21 @@ class _DocumentationBuilder:
 
     _TOKENS_PER_SECTION = 6_000
 
+    # Injected into every section prompt to enforce dual-audience structure.
+    _DUAL_AUDIENCE = (
+        "\nAUDIENCE — This documentation is read by two groups:\n"
+        "  • PRODUCT OWNERS: business stakeholders who need to understand WHAT the system\n"
+        "    does, WHY it exists, what business rules it enforces, and what outcomes it\n"
+        "    produces. They do not need code-level details.\n"
+        "  • DEVELOPERS: engineers who need to understand HOW the system works technically,\n"
+        "    what libraries and patterns are used, and how to maintain or extend it.\n\n"
+        "Structure every major topic using this two-part format:\n"
+        "  > Business need: [plain English — purpose, business rule, or outcome; no code terms]\n"
+        "  > Technical detail: [implementation — libraries, functions, file names, patterns]\n\n"
+        "If a point has no meaningful business dimension, label it [Developers only].\n"
+        "If a point is pure business context with no code implication, label it [Product Owners only].\n"
+    )
+
     def __init__(self, llm: AzureLLMClient, context_block: str):
         self.llm = llm
         self.ctx = context_block
@@ -218,25 +233,27 @@ class _DocumentationBuilder:
         bullet_block = "\n".join(f"  {i+1}. {a}" for i, a in enumerate(raw_assumptions))
         prompt = (
             f"You are writing the ASSUMPTIONS section of a technical migration document "
-            f"for a COBOL-to-Python conversion project.\n\n"
+            f"for a COBOL-to-Python conversion project.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"The following assumptions were recorded during the transformation because "
             f"the COBOL source did not provide complete visibility into the beginning or "
             f"end of the business process:\n\n"
             f"{bullet_block}\n\n"
             f"Write a well-organized ASSUMPTIONS section (400–700 words) that:\n"
-            f"1. Opens with a brief explanation of WHY assumptions were necessary "
-            f"(incomplete process boundaries, partial source visibility, missing calling context)\n"
+            f"1. Opens with a brief explanation of WHY assumptions were necessary — "
+            f"frame it in terms both a product owner and a developer will understand\n"
             f"2. Groups assumptions into clear categories:\n"
             f"   a. Process Triggers and Scheduling\n"
             f"   b. Pre-conditions and Input Requirements\n"
             f"   c. Outputs and Downstream Consumers\n"
             f"   d. Business Process Context\n"
             f"   e. Scope and Boundary Assumptions\n"
-            f"3. For each assumption: states it clearly, notes the evidence from the code, "
-            f"and gives a confidence level (HIGH / MEDIUM / LOW)\n"
-            f"4. Closes with a paragraph on what additional information would be needed "
-            f"to validate or refine these assumptions\n\n"
+            f"3. For each assumption: the business impact of getting it wrong, the technical "
+            f"evidence from the code, and a confidence level (HIGH / MEDIUM / LOW)\n"
+            f"4. Closes with what each audience needs to do to validate these assumptions: "
+            f"what a product owner should confirm with business stakeholders, and what a "
+            f"developer should verify in the codebase or environment\n\n"
             f"Write in plain prose with sub-headings. No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
@@ -249,20 +266,26 @@ class _DocumentationBuilder:
         notes = "\n\n".join(t.transformation_notes for t in transformations[:8])
         combined = _clusters_block(cluster_texts)
         prompt = (
-            f"You are writing the OVERVIEW section of a technical document for a COBOL-to-Python migration.\n\n"
+            f"You are writing the OVERVIEW section of a technical document for a COBOL-to-Python migration.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"Cluster summaries (what the original COBOL system does):\n{combined}\n\n"
             f"Transformation summary per file:\n{notes}\n\n"
-            f"Write a comprehensive OVERVIEW (500–800 words) covering:\n"
-            f"1. What the original COBOL system does and why it exists (business purpose)\n"
-            f"2. What was transformed: which programs, what types of operations are involved\n"
-            f"3. The two Python versions produced and how they differ:\n"
-            f"   - DB Version: real database calls, identical to original COBOL behavior\n"
-            f"   - ETL/File Version: write operations replaced with staging files for a downstream ETL job\n"
-            f"4. Key architectural decisions made during the conversion\n"
-            f"5. How to read this documentation (which sections to consult for what)\n"
-            f"6. Any significant limitations or caveats about the conversion\n\n"
-            f"Write for a technical reader who is new to this system. No markdown fences."
+            f"Write a comprehensive OVERVIEW (500–800 words) structured so that both a product owner "
+            f"and a developer can orient themselves. Cover:\n"
+            f"1. Business need: why this system exists, what business problem it solves, who uses it, "
+            f"and what outcome it produces — in plain language for product owners\n"
+            f"2. Technical scope: which programs were transformed, what types of operations are involved — "
+            f"for developers\n"
+            f"3. The two Python versions produced:\n"
+            f"   - DB Version (business view): identical behavior to the original COBOL system\n"
+            f"   - DB Version (technical view): real SQLAlchemy database calls, # DB_OPERATION: markers\n"
+            f"   - ETL/File Version (business view): write operations are staged for an ETL pipeline\n"
+            f"   - ETL/File Version (technical view): CSV staging files, # ETL_STEP: markers, ETL contract block\n"
+            f"4. Key decisions made during the conversion and their business/technical rationale\n"
+            f"5. A navigation guide: which sections a product owner should read vs. a developer\n"
+            f"6. Known limitations or caveats relevant to each audience\n\n"
+            f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
@@ -281,24 +304,26 @@ class _DocumentationBuilder:
         )
         combined = _clusters_block(cluster_texts)
         prompt = (
-            f"You are writing the ETL INTERACTION STEPS section of a technical migration document.\n\n"
+            f"You are writing the ETL INTERACTION STEPS section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"Context (what the system does):\n{combined[:3000]}\n\n"
             f"The following COBOL write/modify operations were detected by static analysis "
             f"and converted to ETL staging file writes in the ETL version of the Python code:\n\n"
             f"{ops_block}\n\n"
-            f"Write the ETL INTERACTION STEPS section (600–900 words) covering:\n"
-            f"1. An explanation of the ETL pattern: how the file-based Python version works, "
-            f"what staging files it produces, and what a downstream ETL job must do with them\n"
-            f"2. A clear table or structured list of EVERY ETL step with columns:\n"
-            f"   Step # | Operation Type | Source Table/Dataset | Staging File Name | "
-            f"What the ETL Job Must Do (insert/update/delete target)\n"
-            f"3. The expected sequence in which staging files are produced (critical for the ETL job)\n"
-            f"4. Dependencies between ETL steps (e.g., inserts before updates on the same table)\n"
-            f"5. The # ETL_STEP: comment marker convention used in the Python code — "
-            f"how to locate and trace each step\n"
-            f"6. Steps that do NOT require ETL interaction (read-only DB queries kept in both versions)\n\n"
-            f"This section will be read by the ETL engineering team. Be precise and actionable. "
+            f"Write the ETL INTERACTION STEPS section (600–900 words) covering both perspectives:\n\n"
+            f"Business need (product owner view):\n"
+            f"  - Why these data movements exist: what business event triggers them, what records "
+            f"    are affected, and what the business outcome is for each step\n"
+            f"  - What happens to the business if a step is skipped or fails\n"
+            f"  - Who owns each data domain (which team or system is the authoritative source)\n\n"
+            f"Technical detail (developer view):\n"
+            f"  - A table of EVERY ETL step: Step # | Operation Type | Source Table/Dataset | "
+            f"Staging File Name | What the ETL Job Must Do\n"
+            f"  - The expected sequence in which staging files are produced\n"
+            f"  - Dependencies between steps (e.g., inserts before updates on the same table)\n"
+            f"  - The # ETL_STEP: comment marker convention and how to trace steps in the code\n"
+            f"  - Read-only DB queries that are NOT ETL steps (kept in both versions)\n\n"
             f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
@@ -314,21 +339,29 @@ class _DocumentationBuilder:
             for t in transformations
         )
         prompt = (
-            f"You are writing the PYTHON CODE — DATABASE VERSION section of a technical migration document.\n\n"
+            f"You are writing the PYTHON CODE — DATABASE VERSION section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"Context (what the COBOL system does):\n{combined[:3000]}\n\n"
             f"Python modules produced:\n{modules}\n\n"
-            f"Write this section (600–900 words) covering:\n"
-            f"1. The module structure of the DB version: one sub-section per Python module "
-            f"covering its purpose, key classes/functions, and how it maps to the COBOL original\n"
-            f"2. Database connectivity: how the SQLAlchemy engine and session are set up, "
-            f"connection string configuration, and connection pooling\n"
-            f"3. How database operations are structured: parameterized queries vs ORM, "
-            f"transaction boundaries, and rollback conditions\n"
-            f"4. The # DB_OPERATION: comment convention — how to navigate the code using it\n"
-            f"5. Error handling for database failures\n"
-            f"6. How to run this version and what runtime dependencies are required\n\n"
-            f"Write for a developer who will deploy and maintain this code. No markdown fences."
+            f"Write this section (600–900 words) covering both perspectives:\n\n"
+            f"Business need (product owner view):\n"
+            f"  - What this version of the code does from a business perspective — it is a "
+            f"    functionally equivalent replacement for the original COBOL program\n"
+            f"  - What business capabilities it preserves: the same rules, the same data, "
+            f"    the same outcomes as the original system\n"
+            f"  - Any business behavior changes introduced by the conversion (there should be none, "
+            f"    but flag any if present)\n\n"
+            f"Technical detail (developer view):\n"
+            f"  - Module structure: one sub-section per Python module — purpose, key classes/functions, "
+            f"    mapping to the original COBOL\n"
+            f"  - Database connectivity: SQLAlchemy engine/session setup, connection string config\n"
+            f"  - How database operations are structured: parameterized queries, ORM vs Core, "
+            f"    transaction boundaries, rollback conditions\n"
+            f"  - The # DB_OPERATION: comment convention for navigating the code\n"
+            f"  - Error handling for database failures\n"
+            f"  - Runtime dependencies and how to run this version\n\n"
+            f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
@@ -344,20 +377,27 @@ class _DocumentationBuilder:
         })
         files_block = "\n".join(f"  - {f}" for f in staging_files) or "  (none detected)"
         prompt = (
-            f"You are writing the PYTHON CODE — ETL/FILE VERSION section of a technical migration document.\n\n"
+            f"You are writing the PYTHON CODE — ETL/FILE VERSION section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"Context (what the COBOL system does):\n{combined[:3000]}\n\n"
             f"Staging files this version produces:\n{files_block}\n\n"
-            f"Write this section (600–900 words) covering:\n"
-            f"1. How the ETL version differs from the DB version (only the I/O layer changes)\n"
-            f"2. The ETL contract comment block at the top of each module — what it contains "
-            f"and how an ETL engineer should read it\n"
-            f"3. Staging file naming convention, format (CSV with header row), and encoding (UTF-8)\n"
-            f"4. The # ETL_STEP: comment convention\n"
-            f"5. Which database reads are KEPT in this version and why (read-only lookups)\n"
-            f"6. How to run the ETL version, what output to expect, and how to verify it\n"
-            f"7. What the downstream ETL job needs to do with each staging file\n\n"
-            f"Write for both the Python developer and the ETL integration team. No markdown fences."
+            f"Write this section (600–900 words) covering both perspectives:\n\n"
+            f"Business need (product owner view):\n"
+            f"  - Why this version exists: the business reason for routing writes through an ETL "
+            f"    pipeline instead of directly to the database (auditability, data governance, "
+            f"    decoupling, environment constraints, or other)\n"
+            f"  - What business data is staged and what the downstream ETL job does with it\n"
+            f"  - The business impact if the ETL job does not run or runs out of sequence\n\n"
+            f"Technical detail (developer view):\n"
+            f"  - How this version differs from the DB version: only the I/O layer changes, "
+            f"    business logic is identical\n"
+            f"  - The ETL contract comment block at the top of each module and how to read it\n"
+            f"  - Staging file naming convention, format (UTF-8 CSV with header row), schema\n"
+            f"  - The # ETL_STEP: comment convention\n"
+            f"  - Which database reads are kept in this version and why (read-only lookups)\n"
+            f"  - How to run the ETL version, expected output, and how to verify correctness\n\n"
+            f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
@@ -370,38 +410,51 @@ class _DocumentationBuilder:
         write_block = "\n".join(f"  - Line {op.line_number}: {op.description}" for op in writes) or "  (none)"
         combined = _clusters_block(cluster_texts)
         prompt = (
-            f"You are writing the DATABASE OPERATIONS section of a technical migration document.\n\n"
+            f"You are writing the DATABASE OPERATIONS section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"Context:\n{combined[:2000]}\n\n"
             f"Read operations:\n{read_block}\n\n"
             f"Write / modify operations:\n{write_block}\n\n"
-            f"Write this section (500–700 words) covering:\n"
-            f"1. Every table and dataset accessed by this system (a named inventory)\n"
-            f"2. Read operations: what data is queried, key filter conditions, expected result sets\n"
-            f"3. Write operations: what data is inserted, updated, or deleted, and under what conditions\n"
-            f"4. Any data transformation applied to query results before use\n"
-            f"5. Transaction boundaries: what is committed together, rollback conditions\n"
-            f"6. In the ETL version: which of these become staging files vs. which remain live DB calls\n\n"
-            f"Distinguish reads from writes clearly. No markdown fences."
+            f"Write this section (500–700 words) covering both perspectives:\n\n"
+            f"Business need (product owner view):\n"
+            f"  - What business information is read: what the data represents in business terms, "
+            f"    who owns it, and why the system needs it\n"
+            f"  - What business records are created or changed: what the write operations mean "
+            f"    for the business (e.g., 'a new claim is recorded', 'a policy status is updated')\n"
+            f"  - Business rules that govern when reads and writes happen\n\n"
+            f"Technical detail (developer view):\n"
+            f"  - Named inventory of every table and dataset accessed\n"
+            f"  - Read operations: query structure, key filter conditions, expected result sets\n"
+            f"  - Write operations: data inserted/updated/deleted and under what conditions\n"
+            f"  - Data transformations applied to query results\n"
+            f"  - Transaction boundaries and rollback conditions\n"
+            f"  - In the ETL version: which become staging files vs. which remain live DB calls\n\n"
+            f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
     def _business_logic(self, cluster_texts: list[str]) -> str:
         combined = _clusters_block(cluster_texts)
         prompt = (
-            f"You are writing the BUSINESS LOGIC section of a technical migration document.\n\n"
+            f"You are writing the BUSINESS LOGIC section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"Cluster summaries:\n{combined}\n\n"
-            f"Write this section (500–700 words) covering ONLY the non-ETL processing logic "
-            f"(this logic is IDENTICAL in both Python versions):\n"
-            f"1. Calculations and mathematical transformations (formulas, rates, totals, rounding)\n"
-            f"2. Validation rules: what is checked, what action is taken on failure\n"
-            f"3. Branching and conditional logic: key IF/EVALUATE decisions and their outcomes\n"
-            f"4. Loops and iteration patterns: what they process and their exit conditions\n"
-            f"5. Status codes, flags, and return codes managed by the program\n"
-            f"6. String and data formatting operations\n\n"
-            f"Do NOT include database I/O here — that belongs in Database Operations. "
-            f"Focus on logic that would exist regardless of whether the system uses a DB or files. "
+            f"Write this section (500–700 words) covering the non-ETL processing logic "
+            f"(identical in both Python versions) from both perspectives:\n\n"
+            f"Business need (product owner view) — for each major logic area:\n"
+            f"  - What business rule or requirement this logic fulfills\n"
+            f"  - What the business outcome is when the rule passes vs. fails\n"
+            f"  - Any compliance, regulatory, or policy context behind the rule\n\n"
+            f"Technical detail (developer view) — for each logic area:\n"
+            f"  - Calculations: formulas, rates, totals, rounding rules\n"
+            f"  - Validation rules: what is checked, what action is taken on failure\n"
+            f"  - Branching and conditional logic: key IF/EVALUATE decisions\n"
+            f"  - Loops and iteration: what they process, exit conditions\n"
+            f"  - Status codes, flags, and return codes\n"
+            f"  - String and data formatting operations\n\n"
+            f"Do NOT include database I/O — that belongs in Database Operations. "
             f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
@@ -415,51 +468,107 @@ class _DocumentationBuilder:
             for i, op in enumerate(all_etl_ops)
         ) or "  (no data operations detected)"
         prompt = (
-            f"You are writing the DATA FLOW section of a technical migration document.\n\n"
+            f"You are writing the DATA FLOW section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
             f"{self.ctx}\n\n"
             f"Cluster summaries:\n{combined[:2500]}\n\n"
             f"Data operations in detected sequence:\n{ops_seq}\n\n"
-            f"Write this section (500–700 words) tracing the complete data lifecycle:\n"
-            f"1. Inputs: what enters the system, from where (files, DB tables, parameters), "
-            f"in what format, and what it represents\n"
-            f"2. Processing stages: step-by-step how data moves and is transformed\n"
-            f"3. Intermediate state: working storage, temporary tables, in-memory structures\n"
-            f"4. Outputs: what leaves the system, to which destination, in which format\n"
-            f"5. ETL version differences: which staging files are produced and at which stage\n\n"
+            f"Write this section (500–700 words) tracing the complete data lifecycle "
+            f"from both perspectives:\n\n"
+            f"Business need (product owner view):\n"
+            f"  - What business information enters the system, where it comes from, "
+            f"    and what it represents in business terms\n"
+            f"  - What happens to the data as it moves through the process — the business "
+            f"    transformations and decisions applied\n"
+            f"  - What business information leaves the system and who or what uses it\n\n"
+            f"Technical detail (developer view):\n"
+            f"  - Inputs: sources (files, DB tables, parameters), formats, data types\n"
+            f"  - Processing stages: how data moves and is transformed step-by-step\n"
+            f"  - Intermediate state: working storage, temporary tables, in-memory structures\n"
+            f"  - Outputs: destination, format, encoding\n"
+            f"  - ETL version: which staging files are produced and at which stage\n\n"
             f"Follow a logical sequential flow from input to output. No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
     def _decision_points(self, cluster_texts: list[str]) -> str:
-        prompt = PromptBuilder.build_section_prompt_from_clusters(
-            "decision_points", cluster_texts, self.ctx
+        combined = _clusters_block(cluster_texts)
+        prompt = (
+            f"You are writing the DECISION POINTS section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
+            f"{self.ctx}\n\n"
+            f"Cluster summaries:\n{combined}\n\n"
+            f"Write this section (500–700 words) covering every significant conditional logic "
+            f"and business rule from both perspectives:\n\n"
+            f"Business need (product owner view) — for each decision point:\n"
+            f"  - The business rule or policy being enforced in plain English\n"
+            f"  - The possible outcomes and what each means for the business\n"
+            f"  - The business consequence of the rule being wrong or bypassed\n\n"
+            f"Technical detail (developer view) — for each decision point:\n"
+            f"  - The condition being evaluated (variable, flag, or data value)\n"
+            f"  - The code path taken for each outcome (function called, branch taken)\n"
+            f"  - Which program or module applies the decision\n\n"
+            f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
     def _systems(self, cluster_texts: list[str]) -> str:
-        prompt = PromptBuilder.build_section_prompt_from_clusters(
-            "systems_and_components", cluster_texts, self.ctx
+        combined = _clusters_block(cluster_texts)
+        prompt = (
+            f"You are writing the SYSTEMS AND COMPONENTS section of a technical migration document.\n"
+            f"{self._DUAL_AUDIENCE}\n"
+            f"{self.ctx}\n\n"
+            f"Cluster summaries:\n{combined}\n\n"
+            f"Write this section (500–700 words) as a plain-language inventory of every system "
+            f"and component involved, from both perspectives:\n\n"
+            f"Business need (product owner view) — for each component:\n"
+            f"  - What this component does in business terms\n"
+            f"  - Which team or department owns it\n"
+            f"  - What business capability would be lost if it were unavailable\n\n"
+            f"Technical detail (developer view) — organize into categories:\n"
+            f"  Core Processing Programs | Shared Modules & Copybooks | Input Data Sources |\n"
+            f"  Output Files & Reports | Databases & Data Stores | External Interfaces |\n"
+            f"  Batch / Scheduled Jobs\n"
+            f"  For each: technical name, type, purpose, and how it connects to the rest\n\n"
+            f"No markdown fences."
         )
         return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
     def _appendix(
         self, cluster_texts: list[str], all_etl_ops: list[ETLOperation]
     ) -> str:
+        combined = _clusters_block(cluster_texts)
         staging_files = sorted({
             f"etl_stage_{op.table_or_file.lower()}.csv"
             for op in all_etl_ops if not op.is_read
         })
         files_block = "\n".join(f"  - {f}" for f in staging_files) or "  (none)"
-        base_prompt = PromptBuilder.build_section_prompt_from_clusters(
-            "appendix", cluster_texts, self.ctx
-        )
-        extra = (
-            f"\n\nAdditional appendix item — ETL Staging File Reference:\n"
-            f"Include a sub-section listing all ETL staging files produced by the file version:\n"
+        prompt = (
+            f"You are writing the APPENDIX of a technical migration document. "
+            f"This is a reference section for both product owners and developers.\n\n"
+            f"{self.ctx}\n\n"
+            f"Cluster summaries:\n{combined[:2000]}\n\n"
+            f"Create the following sub-sections:\n\n"
+            f"A. GLOSSARY — Define every technical term, acronym, system name, and domain-specific "
+            f"phrase used in this document. List alphabetically. Each entry should be written so "
+            f"that a product owner can understand it without technical background.\n\n"
+            f"B. COMPONENT INDEX — A quick-reference list of every program, file, database, and "
+            f"system mentioned. For each: name, type, one-sentence business purpose, and one-sentence "
+            f"technical description.\n\n"
+            f"C. ROLES AND RESPONSIBILITIES — Every role, team, or person type referenced. "
+            f"For each: role name, which part of the process they own, and what they are responsible for. "
+            f"Include both business roles (product owner, business analyst) and technical roles "
+            f"(developer, ETL engineer, DBA).\n\n"
+            f"D. ETL STAGING FILE REFERENCE — All ETL staging files produced by the ETL version:\n"
             f"{files_block}\n"
-            f"For each file: name, target table/dataset, operation type, and expected schema/columns."
+            f"For each file: name, target table/dataset, operation type (insert/update/delete), "
+            f"and expected column schema.\n\n"
+            f"E. KEY ASSUMPTIONS — List all assumptions made during transformation, noting what "
+            f"a product owner should confirm with business stakeholders and what a developer "
+            f"should verify in the codebase or environment.\n\n"
+            f"No markdown fences."
         )
-        return self.llm.query(base_prompt + extra, max_tokens=self._TOKENS_PER_SECTION)
+        return self.llm.query(prompt, max_tokens=self._TOKENS_PER_SECTION)
 
 
 # ---------------------------------------------------------------------------

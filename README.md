@@ -11,7 +11,7 @@ Transforms legacy COBOL programs into Python code and produces comprehensive tec
 3. **Transforms** each COBOL file into Python — twice:
    - **DB Version** — database operations (SQL, CICS) kept as real SQLAlchemy / pyodbc calls, identical in behavior to the original COBOL.
    - **ETL/File Version** — all write/insert/update/delete operations replaced with CSV staging files for a downstream ETL job; read-only queries remain as live database calls.
-4. **Documents** the entire system in a single Markdown file covering overview, assumptions, ETL interaction steps, architecture, data flow, business logic, and a full appendix.
+4. **Documents** the entire system in a single Markdown file written for two audiences — product owners (business need, rules, outcomes) and developers (technical implementation, libraries, code patterns). Every section explicitly addresses both perspectives.
 
 ---
 
@@ -27,9 +27,22 @@ Transforms legacy COBOL programs into Python code and produces comprehensive tec
 | **Business logic** | Identical | Identical |
 | **Use case** | Direct migration, full DB access | Environments where writes must go through an ETL pipeline |
 
+### Dual-Audience Documentation
+
+Every section of the generated documentation is written for two distinct audiences:
+
+| Audience | What they see | Purpose |
+|---|---|---|
+| **Product Owners** | Plain-English business need, rules, outcomes, and stakeholder impact | Understand what the system does and why without reading code |
+| **Developers** | Technical implementation — libraries, code patterns, file names, comment markers | Maintain, extend, or debug the converted system |
+
+Each major topic uses a consistent two-line format:
+- `Business:` — plain language, no code terms
+- `Technical:` — implementation detail, library names, code references
+
 ### Assumptions Section
 
-The COBOL source often does not show what triggers a program, what ran before it, or what consumes its output. The documentation includes an **Assumptions** section that records what was inferred from the code, the supporting evidence, and a confidence level (HIGH / MEDIUM / LOW). This section must be validated with the original system owners before production use.
+The COBOL source often does not show what triggers a program, what ran before it, or what consumes its output. The documentation includes an **Assumptions** section that records what was inferred from the code, the supporting evidence, and a confidence level (HIGH / MEDIUM / LOW). Critically, the section also tells each audience what they specifically need to do to validate the assumptions — product owners confirm with business stakeholders, developers verify in the codebase.
 
 ### ETL Interaction Steps
 
