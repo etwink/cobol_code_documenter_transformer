@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-04
+## [Unreleased] — 2026-06-04 · `de6b104`
 
 ### Fixed — `output_writer.py`
 - **Folders created but no files written**: added per-file try/except around every write operation so a single failure no longer silently stops the rest from writing
@@ -28,7 +28,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.2.0] — 2026-06-03
+## [0.2.0] — 2026-06-03 · `464a426`
 
 ### Fixed — Import errors
 - `hierarchical_summarizer.py`: `from .cluster_builder import DocumentCluster` changed to `from cluster_builder import DocumentCluster` — relative import failed when the module is loaded as a top-level module rather than part of a package
@@ -46,7 +46,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.1.0] — 2026-06-02
+## [0.1.0] — 2026-06-02 · `0a9ae11`
 
 ### Added — Core transformation pipeline
 - `etl_detector.py`: regex-based scanner that identifies EXEC SQL (SELECT, INSERT, UPDATE, DELETE, cursor), EXEC CICS (READ, WRITE, REWRITE, DELETE), and sequential file I/O (OPEN, READ, WRITE, CLOSE) in COBOL source; returns typed `ETLOperation` objects with line number, target table/file, and read/write flag
