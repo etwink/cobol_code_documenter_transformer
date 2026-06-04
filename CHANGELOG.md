@@ -5,7 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-04 · `c9dcbb8`
+## [Unreleased] — 2026-06-04 · `e457dcb`
+
+### Fixed — Recursive folder scanning not entering subdirectories
+- `folder_scanner.py`: replaced `Path.glob("**/*")` with `os.walk()` for recursive mode — `glob` has known reliability issues on Windows with certain directory structures; `os.walk()` is guaranteed to traverse all subdirectories on every platform
+- `folder_scanner.py`: switched non-recursive mode from `glob("*")` to `Path.iterdir()` for consistency; extracted categorization into a `_categorize()` static method; deduplication now uses resolved paths to handle symlinks correctly
+
+### Added — `.txt` file support
+- `folder_scanner.py`: new `OTHER_EXTENSIONS = {".TXT"}` constant and `other: list[Path]` field on `ScannedDocuments`; `summary()` reports text file counts
+- `transformation_pipeline.py`: `scanned.other` merged into `word_files` when calling `build_clusters()` so `.txt` files are treated as documentation and matched to COBOL clusters by program-name mentions
+- `cluster_builder.py`: `.TXT` added to `word_exts` in `_fallback_cluster_by_type` so `.txt` files group with business documents when LLM clustering falls back
+- `document_loaders/loaders.py`: `.txt` was already mapped to `TextDocumentLoader` — no change needed
+
+---
+
+## [0.4.0] — 2026-06-04 · `c9dcbb8`
 
 ### Fixed — Empty transformations / no Python files written
 - `transformation_pipeline.py`: raise `ValueError` immediately after scanning when no COBOL files are found, with a clear message showing the paths searched, the supported extensions, and what other files were discovered — instead of silently completing with empty output
