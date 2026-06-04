@@ -125,8 +125,9 @@ class TransformationPipeline:
             context_block=self.context_block,
         )
 
-        # ── 4. Build dependency context string ───────────────────────────────
+        # ── 4. Build dependency context and system map ───────────────────────
         dep_context = _build_dep_context(scanned.cobol)
+        system_map  = _build_system_map(scanned.cobol)
 
         # ── 5. Aggregate documentation context from cluster summaries ────────
         doc_context = "\n\n".join(cs.summary for cs in cluster_summaries)
@@ -141,6 +142,7 @@ class TransformationPipeline:
                     cobol_path,
                     dependency_context=dep_context,
                     documentation_context=doc_context[:4_000],
+                    system_context=system_map,
                 )
             except Exception as exc:
                 error_msg = (
@@ -328,7 +330,7 @@ class _DocumentationBuilder:
             )
         ops_block = "\n".join(
             f"  {i+1:>3}. Line {op.line_number:>5} | [{op.operation_type.value:<16}] "
-            f"{op.description:<50} → etl_stage_{op.table_or_file.lower()}.csv"
+            f"{op.description:<50} → etl_out_{op.table_or_file.lower()}.csv"
             for i, op in enumerate(write_ops)
         )
         combined = _clusters_block(cluster_texts)
@@ -402,7 +404,7 @@ class _DocumentationBuilder:
     ) -> str:
         combined = _clusters_block(cluster_texts)
         staging_files = sorted({
-            f"etl_stage_{op.table_or_file.lower()}.csv" for op in write_ops
+            f"etl_out_{op.table_or_file.lower()}.csv" for op in write_ops
         })
         files_block = "\n".join(f"  - {f}" for f in staging_files) or "  (none detected)"
         prompt = (
@@ -568,7 +570,7 @@ class _DocumentationBuilder:
     ) -> str:
         combined = _clusters_block(cluster_texts)
         staging_files = sorted({
-            f"etl_stage_{op.table_or_file.lower()}.csv"
+            f"etl_out_{op.table_or_file.lower()}.csv"
             for op in all_etl_ops if not op.is_read
         })
         files_block = "\n".join(f"  - {f}" for f in staging_files) or "  (none)"
@@ -613,6 +615,56 @@ def _build_dep_context(cobol_files: list[Path]) -> str:
     for src, deps in sorted(graph.items()):
         for dep in deps:
             lines.append(f"{src} --[{dep['dep_type']}]--> {dep['target']}")
+    return "\n".join(lines)
+
+
+def _build_system_map(cobol_files: list[Path]) -> str:
+    """
+    Build a human-readable map of the whole system for the LLM.
+
+    Shows every COBOL program alongside its Python module name and
+    which other modules it calls or is called by.  This is injected
+    into every transformer prompt so the LLM can generate correct
+    relative imports and understand the program hierarchy.
+    """
+    if not cobol_files:
+        return ""
+
+    analyses = [parse_file(p) for p in cobol_files]
+    graph = build_dependency_graph(analyses)
+
+    # Build reverse map: who calls each program
+    callers: dict[str, list[str]] = {}
+    for src, deps in graph.items():
+        for dep in deps:
+            callers.setdefault(dep["target"], []).append(src)
+
+    # All known stems (upper-case)
+    all_stems = {p.stem.upper() for p in cobol_files}
+
+    lines = [
+        "All programs in this system (treat them as one connected Python package):",
+        "",
+    ]
+    for p in sorted(cobol_files, key=lambda x: x.stem.upper()):
+        stem = p.stem.upper()
+        py_name = p.stem.lower() + ".py"
+        calls = sorted({d["target"] for d in graph.get(stem, []) if d["target"] in all_stems})
+        called_by = sorted(set(callers.get(stem, [])) & all_stems)
+
+        role = "entry point" if stem not in callers else "subprogram/utility"
+        lines.append(f"  {stem:<20} → {py_name:<30} [{role}]")
+        if calls:
+            lines.append(f"    calls    : {', '.join(calls)}")
+        if called_by:
+            lines.append(f"    called by: {', '.join(called_by)}")
+
+    lines += [
+        "",
+        "Python import convention for this package:",
+        "  from . import <module_stem>   (for CALL dependencies)",
+        "  from . import <copybook_stem>  (for COPY dependencies)",
+    ]
     return "\n".join(lines)
 
 
