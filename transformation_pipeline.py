@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from folder_scanner import FolderScanner
+from folder_scanner import FolderScanner, COBOL_EXTENSIONS
 from cobol_dependency_analyzer import parse_file, build_dependency_graph
 from cluster_builder import ClusterBuilder, DocumentCluster
 from hierarchical_summarizer import HierarchicalSummarizer, ClusterSummary
@@ -89,7 +89,22 @@ class TransformationPipeline:
         # ── 1. Scan input files ──────────────────────────────────────────────
         _progress("Scanning files", 0, 1)
         scanner = FolderScanner()
-        scanned = scanner.scan([Path(p) for p in input_paths], recursive=recursive)
+        resolved = [Path(p).resolve() for p in input_paths]
+        scanned = scanner.scan(resolved, recursive=recursive)
+        _progress(f"Scan complete — {scanned.summary()}", 1, 1)
+
+        if not scanned.cobol:
+            searched = ", ".join(str(p) for p in resolved)
+            extensions = ", ".join(sorted(COBOL_EXTENSIONS))
+            raise ValueError(
+                f"No COBOL files found.\n"
+                f"  Paths searched : {searched}\n"
+                f"  Extensions     : {extensions}\n"
+                f"  Other files    : {scanned.summary()}\n\n"
+                f"Check that DOCUMENTS_PATH in .env points to the folder containing "
+                f"your COBOL source files and that the files use one of the supported "
+                f"extensions listed above."
+            )
 
         # ── 2. Build clusters ────────────────────────────────────────────────
         _progress("Building clusters", 0, 1)
@@ -121,11 +136,25 @@ class TransformationPipeline:
         total_cobol = len(scanned.cobol)
         for idx, cobol_path in enumerate(scanned.cobol):
             _progress(f"Transforming {cobol_path.name}", idx + 1, total_cobol)
-            result = self.transformer.transform(
-                cobol_path,
-                dependency_context=dep_context,
-                documentation_context=doc_context[:4_000],
-            )
+            try:
+                result = self.transformer.transform(
+                    cobol_path,
+                    dependency_context=dep_context,
+                    documentation_context=doc_context[:4_000],
+                )
+            except Exception as exc:
+                error_msg = (
+                    f"# ERROR: transformation failed for {cobol_path.name}\n"
+                    f"# {type(exc).__name__}: {exc}\n"
+                    f"# Check logs/llm_calls.log for the full request/response.\n"
+                )
+                result = PythonTransformationResult(
+                    source_file=str(cobol_path),
+                    python_db_code=error_msg,
+                    python_etl_code=error_msg,
+                    transformation_notes=f"FAILED — {type(exc).__name__}: {exc}",
+                )
+                _progress(f"  ERROR transforming {cobol_path.name}: {exc}", idx + 1, total_cobol)
             transformations.append(result)
 
         # ── 7. Aggregate ETL operations ──────────────────────────────────────

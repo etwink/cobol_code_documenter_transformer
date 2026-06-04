@@ -53,17 +53,32 @@ class CobolToPythonTransformer:
         dependency_context: str = "",
         documentation_context: str = "",
     ) -> PythonTransformationResult:
-        """Transform one COBOL file into both Python variants."""
+        """Transform one COBOL file into both Python variants.
+
+        Each LLM call is attempted independently.  If one fails the others
+        still run and the error is embedded as a comment in the output file
+        rather than crashing the pipeline.
+        """
         source = _read_cobol(cobol_path)
         etl_ops = self.detector.extract(source)
 
         truncated = source[: self._MAX_SOURCE_CHARS]
         was_truncated = len(source) > self._MAX_SOURCE_CHARS
 
-        db_code   = self._generate_db_version(truncated, cobol_path.name, dependency_context, documentation_context, was_truncated)
-        etl_code  = self._generate_etl_version(truncated, cobol_path.name, dependency_context, documentation_context, etl_ops, was_truncated)
-        assumptions = self._extract_assumptions(truncated, cobol_path.name, dependency_context, documentation_context)
-        notes     = _build_transformation_notes(cobol_path.name, etl_ops, was_truncated)
+        db_code = self._call_llm(
+            self._generate_db_version,
+            truncated, cobol_path.name, dependency_context, documentation_context, was_truncated,
+            label="DB version",
+        )
+        etl_code = self._call_llm(
+            self._generate_etl_version,
+            truncated, cobol_path.name, dependency_context, documentation_context, etl_ops, was_truncated,
+            label="ETL version",
+        )
+        assumptions = self._call_assumptions(
+            truncated, cobol_path.name, dependency_context, documentation_context
+        )
+        notes = _build_transformation_notes(cobol_path.name, etl_ops, was_truncated)
 
         return PythonTransformationResult(
             source_file=str(cobol_path),
@@ -73,6 +88,24 @@ class CobolToPythonTransformer:
             assumptions=assumptions,
             transformation_notes=notes,
         )
+
+    def _call_llm(self, fn, *args, label: str = "") -> str:
+        """Call an LLM generation method, returning an error comment on failure."""
+        try:
+            return fn(*args)
+        except Exception as exc:
+            return (
+                f"# ERROR generating {label} for this file\n"
+                f"# {type(exc).__name__}: {exc}\n"
+                f"# Check logs/llm_calls.log for the full request/response.\n"
+            )
+
+    def _call_assumptions(self, *args) -> list[str]:
+        """Call the assumptions extractor, returning an empty list on failure."""
+        try:
+            return self._extract_assumptions(*args)
+        except Exception:
+            return []
 
     # ------------------------------------------------------------------
     # DB version

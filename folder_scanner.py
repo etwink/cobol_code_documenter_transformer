@@ -48,6 +48,8 @@ class ScannedDocuments:
             parts.append(f"{len(self.word)} Word")
         if self.excel:
             parts.append(f"{len(self.excel)} Excel")
+        if not parts:
+            return "0 files found"
         return ", ".join(parts) + f" ({self.total_count} total)"
 
 
