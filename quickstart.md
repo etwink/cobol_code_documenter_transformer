@@ -87,9 +87,9 @@ output = pipeline.run(
 )
 
 writer = OutputWriter(output_dir=Path("output"))
-path = writer.write(output)
+report = writer.write(output)
 
-print(f"\nDone. Output written to: {path.resolve()}")
+print(f"\n{report}")
 ```
 
 Run it:
@@ -221,6 +221,76 @@ The `.env` file is missing or in the wrong location. It must be in the project r
 COBOL files longer than ~14,000 characters are truncated before being sent to the LLM to stay within context limits. The ETL detector (regex-based) always processes the full file. You will see this flagged in the transformation notes table in `documentation.md`.
 
 For very large programs, consider splitting the source file or increasing `MODEL_MAX_TOKENS` in `.env`.
+
+---
+
+**`openai.APIConnectionError: Connection error.`**
+
+This error means the OpenAI SDK could not establish a TCP connection to Azure at all. Two things cause it: wrong connection details in `.env`, or an SSL/TLS certificate problem on your machine (common in corporate networks with a proxy or custom CA).
+
+**Step 1 — Rule out a bad `.env` config first**
+
+Check these three things before touching SSL:
+
+- Open `.env` and confirm `AZURE_OPENAI_ENDPOINT` ends with a trailing slash and uses `https://`, e.g. `https://my-resource.openai.azure.com/`. A missing slash or `http://` will cause a connection error.
+- Confirm `AZURE_OPENAI_DEPLOYMENT_NAME` matches the deployment name exactly as it appears in the Azure portal (case-sensitive).
+- Run a quick connectivity test from the terminal — if this returns an error, the endpoint or key is wrong; if it returns JSON, your config is fine and the problem is SSL:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  "https://<your-resource>.openai.azure.com/openai/deployments?api-version=2024-02-15-preview" \
+  -H "api-key: <your-key>"
+```
+
+A `200` or `401` response means the host is reachable. A `000` or `SSL` error means the certificate chain is broken on your machine.
+
+**Step 2 — Fix SSL certificate issues with `truststore`**
+
+Corporate networks often intercept HTTPS traffic using a private CA certificate that Python does not trust by default. `truststore` fixes this by injecting your OS certificate store (which already trusts the corporate CA) into Python's SSL context.
+
+Install it:
+
+```bash
+pip install truststore
+```
+
+Add these two lines to the very top of `run.py`, before any other imports:
+
+```python
+import truststore
+truststore.inject_into_ssl()
+```
+
+Your `run.py` should start like this:
+
+```python
+import truststore
+truststore.inject_into_ssl()
+
+import sys
+sys.path.insert(0, r"C:\path\to\cobol_code_documenter_transformer")
+
+from pathlib import Path
+from transformation_pipeline import TransformationPipeline
+from output_writer import OutputWriter
+# ... rest of your script
+```
+
+`truststore` must be called before the `openai` package initializes its HTTP client, so it must appear before any project imports.
+
+**Still failing after both steps?**
+
+If you still get a connection error after adding `truststore`, check whether a network proxy is required. Some corporate environments block direct HTTPS and require an explicit proxy. Set it in your terminal before running:
+
+```bash
+set HTTPS_PROXY=http://proxy.yourcompany.com:8080   # Windows
+```
+
+Or add it permanently to your `.env`:
+
+```ini
+HTTPS_PROXY=http://proxy.yourcompany.com:8080
+```
 
 ---
 

@@ -13,6 +13,16 @@ python-docx>=1.0.0
 openpyxl>=3.1.0
 
 
+# ── Optional: corporate network / SSL certificate fix ────────────────────────
+# If you get openai.APIConnectionError on a corporate network with a proxy or
+# custom CA, install truststore and add these two lines to the top of run.py
+# (before any other imports):
+#
+#   import truststore
+#   truststore.inject_into_ssl()
+#
+# truststore>=0.9.0
+
 # ── Optional document loaders ─────────────────────────────────────────────────
 # Install these if your input folder contains .xlsb or macro-enabled .xlsm files.
 
