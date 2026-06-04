@@ -111,7 +111,7 @@ class TransformationPipeline:
         cluster_builder = ClusterBuilder()
         clusters = cluster_builder.build_clusters(
             cobol_files=scanned.cobol,
-            word_files=scanned.word,
+            word_files=scanned.word + scanned.other,  # .txt treated as documentation
             excel_files=scanned.excel,
             code_files=scanned.code,
             context_block=self.context_block,

@@ -1,5 +1,6 @@
 """Scan one or more directories and categorize files by type."""
 
+import os
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -23,20 +24,24 @@ CODE_EXTENSIONS = {
     ".CMD",  # Windows command
 }
 
-WORD_EXTENSIONS = {".DOCX", ".DOC"}
+WORD_EXTENSIONS  = {".DOCX", ".DOC"}
 EXCEL_EXTENSIONS = {".XLSX", ".XLS", ".XLSM", ".XLSB"}
+
+# Plain-text documents (change logs, procedures, readme files, data extracts, etc.)
+OTHER_EXTENSIONS = {".TXT"}
 
 
 @dataclass
 class ScannedDocuments:
     cobol: list[Path] = field(default_factory=list)
-    code: list[Path] = field(default_factory=list)   # Non-COBOL source code
-    word: list[Path] = field(default_factory=list)
+    code:  list[Path] = field(default_factory=list)   # Non-COBOL source code
+    word:  list[Path] = field(default_factory=list)
     excel: list[Path] = field(default_factory=list)
+    other: list[Path] = field(default_factory=list)   # Plain-text docs (.txt)
 
     @property
     def total_count(self) -> int:
-        return len(self.cobol) + len(self.code) + len(self.word) + len(self.excel)
+        return len(self.cobol) + len(self.code) + len(self.word) + len(self.excel) + len(self.other)
 
     def summary(self) -> str:
         parts = []
@@ -48,6 +53,8 @@ class ScannedDocuments:
             parts.append(f"{len(self.word)} Word")
         if self.excel:
             parts.append(f"{len(self.excel)} Excel")
+        if self.other:
+            parts.append(f"{len(self.other)} text")
         if not parts:
             return "0 files found"
         return ", ".join(parts) + f" ({self.total_count} total)"
@@ -64,19 +71,34 @@ class FolderScanner:
             root = Path(root)
             if not root.exists():
                 continue
-            pattern = "**/*" if recursive else "*"
-            for p in sorted(root.glob(pattern)):
-                if not p.is_file() or p in seen:
-                    continue
-                seen.add(p)
-                ext = p.suffix.upper()
-                if ext in COBOL_EXTENSIONS:
-                    result.cobol.append(p)
-                elif ext in CODE_EXTENSIONS:
-                    result.code.append(p)
-                elif ext in WORD_EXTENSIONS:
-                    result.word.append(p)
-                elif ext in EXCEL_EXTENSIONS:
-                    result.excel.append(p)
+
+            if recursive:
+                # os.walk() is reliable across all Python versions and OS platforms;
+                # Path.glob("**/*") has known issues on Windows with some directory structures.
+                for dirpath, _, filenames in os.walk(root):
+                    for filename in sorted(filenames):
+                        self._categorize(Path(dirpath) / filename, result, seen)
+            else:
+                for p in sorted(root.iterdir()):
+                    if p.is_file():
+                        self._categorize(p, result, seen)
 
         return result
+
+    @staticmethod
+    def _categorize(p: Path, result: ScannedDocuments, seen: set[Path]) -> None:
+        resolved = p.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        ext = p.suffix.upper()
+        if ext in COBOL_EXTENSIONS:
+            result.cobol.append(p)
+        elif ext in CODE_EXTENSIONS:
+            result.code.append(p)
+        elif ext in WORD_EXTENSIONS:
+            result.word.append(p)
+        elif ext in EXCEL_EXTENSIONS:
+            result.excel.append(p)
+        elif ext in OTHER_EXTENSIONS:
+            result.other.append(p)

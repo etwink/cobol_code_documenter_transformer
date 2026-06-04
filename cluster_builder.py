@@ -548,7 +548,7 @@ def _fallback_cluster_by_type(doc_files: list[Path]) -> list[dict]:
     Splits files into buckets by broad file type so there is at least some
     differentiation rather than one giant cluster.
     """
-    word_exts = {".DOCX", ".DOC"}
+    word_exts = {".DOCX", ".DOC", ".TXT"}
     excel_exts = {".XLSX", ".XLS", ".XLSM", ".XLSB"}
     code_exts = {".PY", ".SQL", ".JS", ".TS", ".VB", ".BAS", ".CS", ".JAVA",
                  ".PS1", ".R", ".SH", ".BAT", ".CMD"}
