@@ -5,7 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-04 · `e457dcb`
+## [Unreleased] — 2026-06-04 · `66b24e2`
+
+### Changed — Connected system architecture
+- `cobol_transformer.py`: new `system_context` parameter on `transform()` — a map of every program in the scan and its Python module name; injected into DB and ETL version prompts so the LLM generates correct relative imports (`from . import <module>`) for CALL/COPY dependencies
+- `transformation_pipeline.py`: new `_build_system_map()` helper builds a human-readable system map (program name, Python module name, calls, called-by) passed to every transformer call
+- `cobol_transformer.py` DB version prompt: instructs the LLM to expose a clear entry point or public function, use package-style imports, and avoid duplicating logic across modules
+
+### Changed — ETL version redesign (fully file-based, no DB connections)
+- `cobol_transformer.py` ETL version prompt: completely rewritten — the ETL version now has **zero database connections**; all DB reads become reads from ETL-provided pipe-delimited input files (`etl_in_<TABLE>.txt`); all DB writes become pipe-delimited output files (`etl_out_<TABLE>.txt`) for the ETL environment to process
+- File format: pipe-delimited (`|`) UTF-8 `.txt` files with a header row — not CSV
+- ETL contract block now documents both input and output files, including ETL job specifications (what query the ETL job must run to produce input files; what table operation it must perform on output files)
+- `transformation_pipeline.py`: all `etl_stage_` references replaced with `etl_out_`
+
+### Added — Per-version package files
+- `output_writer.py`: writes `python_db/__init__.py` and `python_etl/__init__.py` making each output directory a proper Python package
+- `output_writer.py`: writes `python_db/requirements.txt` (SQLAlchemy + dotenv) and `python_etl/requirements.txt` (dotenv only — no DB driver needed)
+- `output_writer.py`: writes `python_db/quickstart.md` — DB connection config, how to run, module list, code navigation
+- `output_writer.py`: writes `python_etl/quickstart.md` — how the file-based ETL pattern works, input files required before running, output files produced after running, per-file ETL job specifications for the ETL engineering team
+
+---
+
+## [0.5.0] — 2026-06-04 · `e457dcb`
 
 ### Fixed — Recursive folder scanning not entering subdirectories
 - `folder_scanner.py`: replaced `Path.glob("**/*")` with `os.walk()` for recursive mode — `glob` has known reliability issues on Windows with certain directory structures; `os.walk()` is guaranteed to traverse all subdirectories on every platform
