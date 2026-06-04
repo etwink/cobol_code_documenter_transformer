@@ -5,7 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-04 · `de6b104`
+## [Unreleased] — 2026-06-04 · `c9dcbb8`
+
+### Fixed — Empty transformations / no Python files written
+- `transformation_pipeline.py`: raise `ValueError` immediately after scanning when no COBOL files are found, with a clear message showing the paths searched, the supported extensions, and what other files were discovered — instead of silently completing with empty output
+- `transformation_pipeline.py`: emit a scan-complete progress message after scanning so file counts are visible before any LLM calls are made
+- `transformation_pipeline.py`: resolve input paths before scanning so relative paths appear as absolute paths in error messages
+- `transformation_pipeline.py`: wrap each `transformer.transform()` call in `try/except` so an LLM failure on one file no longer blocks all remaining files; failed files produce a `# ERROR:` comment placeholder and are still written to disk
+- `cobol_transformer.py`: introduce `_call_llm()` and `_call_assumptions()` helpers so DB version, ETL version, and assumptions extraction each fail independently rather than crashing the whole transform
+- `folder_scanner.py`: `summary()` returns `"0 files found"` instead of `" (0 total)"` for the empty case
+
+---
+
+## [0.3.0] — 2026-06-04 · `de6b104`
 
 ### Fixed — `output_writer.py`
 - **Folders created but no files written**: added per-file try/except around every write operation so a single failure no longer silently stops the rest from writing
