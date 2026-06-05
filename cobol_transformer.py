@@ -38,10 +38,18 @@ class PythonTransformationResult:
 class CobolToPythonTransformer:
     """Convert a COBOL source file into two Python variants using an LLM."""
 
-    # Maximum characters of COBOL source passed to each LLM call.
-    # Very large programs are summarised after this point; the full source is
-    # still used for ETL detection (which is regex-based, not LLM-based).
-    _MAX_SOURCE_CHARS = 14_000
+    # gpt-5-mini limits: 272k input tokens, 128k output tokens (shared with reasoning).
+    # At ~4 chars/token, 272k tokens ≈ 1.09M chars of input capacity.
+    # We reserve ~50k chars for the prompt template, context blocks, and system map,
+    # leaving ~150k chars of safe COBOL source per single call.
+    _MAX_SOURCE_CHARS = 150_000   # hard cap for a single LLM call
+
+    # Files larger than this are split into overlapping chunks rather than truncated.
+    # Each chunk re-includes the full DATA DIVISION so data definitions are always
+    # in scope, and the PROCEDURE DIVISION is divided at natural boundaries.
+    _CHUNK_THRESHOLD = 150_000    # chars — above this, use chunked path
+    _CHUNK_SIZE      =  80_000    # target chars per chunk (PROCEDURE section only)
+    _CHUNK_OVERLAP   =   3_000    # chars of overlap carried into the next chunk
 
     def __init__(self):
         self.llm = AzureLLMClient()
@@ -64,27 +72,34 @@ class CobolToPythonTransformer:
         module names — used to generate correct inter-module imports.
         """
         source = _read_cobol(cobol_path)
+        # ETL detection always runs on the full source (regex, no token limit)
         etl_ops = self.detector.extract(source)
 
-        truncated = source[: self._MAX_SOURCE_CHARS]
-        was_truncated = len(source) > self._MAX_SOURCE_CHARS
+        chunks = self._split_into_chunks(source)
+        is_chunked = len(chunks) > 1
+        # Truncation only applies to the non-chunked path (single call > limit)
+        was_truncated = not is_chunked and len(source) > self._MAX_SOURCE_CHARS
 
-        db_code = self._call_llm(
-            self._generate_db_version,
-            truncated, cobol_path.name, dependency_context, documentation_context,
-            system_context, was_truncated,
-            label="DB version",
-        )
-        etl_code = self._call_llm(
-            self._generate_etl_version,
-            truncated, cobol_path.name, dependency_context, documentation_context,
-            etl_ops, system_context, was_truncated,
-            label="ETL version",
-        )
-        assumptions = self._call_assumptions(
-            truncated, cobol_path.name, dependency_context, documentation_context
-        )
-        notes = _build_transformation_notes(cobol_path.name, etl_ops, was_truncated)
+        common_args = (cobol_path.name, dependency_context, documentation_context, system_context)
+
+        if is_chunked:
+            db_code  = self._transform_chunked("db",  chunks, *common_args, etl_ops=etl_ops)
+            etl_code = self._transform_chunked("etl", chunks, *common_args, etl_ops=etl_ops)
+        else:
+            src = source[: self._MAX_SOURCE_CHARS]
+            db_code = self._call_llm(
+                self._generate_db_version,
+                src, *common_args, was_truncated,
+                label="DB version",
+            )
+            etl_code = self._call_llm(
+                self._generate_etl_version,
+                src, *common_args, etl_ops, was_truncated,
+                label="ETL version",
+            )
+
+        assumptions = self._call_assumptions(source[:8_000], *common_args[:2])
+        notes = _build_transformation_notes(cobol_path.name, etl_ops, was_truncated, is_chunked, len(chunks))
 
         return PythonTransformationResult(
             source_file=str(cobol_path),
@@ -112,6 +127,168 @@ class CobolToPythonTransformer:
             return self._extract_assumptions(*args)
         except Exception:
             return []
+
+    # ------------------------------------------------------------------
+    # Chunking — for files that exceed _CHUNK_THRESHOLD
+    # ------------------------------------------------------------------
+
+    def _split_into_chunks(self, source: str) -> list[str]:
+        """
+        Split large COBOL source into overlapping chunks at natural boundaries.
+
+        Strategy:
+          1. Find the PROCEDURE DIVISION marker.  Everything before it (IDENTIFICATION,
+             ENVIRONMENT, DATA divisions) is the "header block" and is prepended to
+             EVERY chunk so data definitions are always in scope.
+          2. Split the PROCEDURE DIVISION at section or paragraph boundaries.
+          3. Consecutive chunks share _CHUNK_OVERLAP characters so the LLM has
+             context about the code that immediately preceded each chunk.
+
+        Falls back to plain character-based splitting if no PROCEDURE DIVISION
+        or no paragraph markers are found.
+        """
+        if len(source) <= self._CHUNK_THRESHOLD:
+            return [source]
+
+        # Locate the PROCEDURE DIVISION
+        proc_match = re.search(
+            r"^\s{0,6}PROCEDURE\s+DIVISION\b",
+            source,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if not proc_match:
+            return self._character_chunks(source)
+
+        header    = source[: proc_match.start()]   # DATA DIVISION and above
+        procedure = source[proc_match.start():]    # PROCEDURE DIVISION onwards
+
+        # If the header alone exceeds the chunk size, just do character chunks
+        if len(header) >= self._CHUNK_SIZE:
+            return self._character_chunks(source)
+
+        available = self._CHUNK_SIZE - len(header)
+
+        # Find paragraph / section boundaries within the PROCEDURE DIVISION
+        # Matches lines like "100-PROCESS.", "200-VALIDATE SECTION.", "EXIT."
+        boundary_re = re.compile(
+            r"^[ \t]{0,6}[A-Z0-9][A-Z0-9\-]{1,}(?:\s+SECTION)?\.",
+            re.MULTILINE | re.IGNORECASE,
+        )
+        boundaries = [m.start() for m in boundary_re.finditer(procedure)]
+
+        if not boundaries:
+            return self._character_chunks(source)
+
+        chunks: list[str] = []
+        proc_start = 0
+
+        while proc_start < len(procedure):
+            target_end = proc_start + available
+
+            if target_end >= len(procedure):
+                # Last chunk — include everything remaining
+                chunk_proc = procedure[max(0, proc_start - self._CHUNK_OVERLAP):]
+                chunks.append(header + chunk_proc)
+                break
+
+            # Find the nearest boundary at or before target_end
+            best = target_end
+            for b in boundaries:
+                if proc_start < b <= target_end:
+                    best = b   # keep taking; last one wins = closest to target
+
+            chunk_proc = procedure[max(0, proc_start - self._CHUNK_OVERLAP): best]
+            chunks.append(header + chunk_proc)
+            proc_start = best
+
+        return chunks if chunks else [source]
+
+    def _character_chunks(self, source: str) -> list[str]:
+        """Plain character-based fallback chunker with overlap."""
+        chunks: list[str] = []
+        start = 0
+        while start < len(source):
+            end = min(start + self._CHUNK_SIZE, len(source))
+            chunks.append(source[start: end])
+            if end == len(source):
+                break
+            start = end - self._CHUNK_OVERLAP
+        return chunks
+
+    def _transform_chunked(
+        self,
+        version: str,               # "db" or "etl"
+        chunks: list[str],
+        filename: str,
+        dep_ctx: str,
+        doc_ctx: str,
+        sys_ctx: str,
+        etl_ops: list[ETLOperation],
+    ) -> str:
+        """Transform each chunk independently then synthesize into one module."""
+        chunk_results: list[str] = []
+        total = len(chunks)
+
+        for i, chunk in enumerate(chunks):
+            chunk_label = f"chunk {i+1}/{total}"
+            if version == "db":
+                code = self._call_llm(
+                    self._generate_db_version,
+                    chunk, filename, dep_ctx, doc_ctx, sys_ctx, False,
+                    label=f"DB version {chunk_label}",
+                )
+            else:
+                code = self._call_llm(
+                    self._generate_etl_version,
+                    chunk, filename, dep_ctx, doc_ctx, etl_ops, sys_ctx, False,
+                    label=f"ETL version {chunk_label}",
+                )
+            chunk_results.append(code)
+
+        if len(chunk_results) == 1:
+            return chunk_results[0]
+
+        return self._call_llm(
+            self._synthesize_chunks,
+            chunk_results, filename, version,
+            label=f"{version.upper()} synthesis",
+        )
+
+    def _synthesize_chunks(
+        self,
+        chunk_results: list[str],
+        filename: str,
+        version: str,
+    ) -> str:
+        """Merge chunk-by-chunk generated Python into one coherent module."""
+        marker = "# DB_OPERATION:" if version == "db" else "# ETL_INPUT:\n# ETL_OUTPUT:"
+        blocks = "\n\n".join(
+            f"# ── CHUNK {i+1} OF {len(chunk_results)} ──\n{code}"
+            for i, code in enumerate(chunk_results)
+        )
+        prompt = (
+            f"You are merging {len(chunk_results)} Python code chunks generated from "
+            f"different sections of one large COBOL file ({filename}) into a single "
+            f"complete, runnable Python module.\n\n"
+            f"Each chunk was generated from a different portion of the PROCEDURE DIVISION. "
+            f"They share the same DATA DIVISION, so data structure definitions and imports "
+            f"may be duplicated across chunks.\n\n"
+            f"Chunks:\n{blocks}\n\n"
+            f"Merge rules:\n"
+            f"1. One set of imports at the top — deduplicate, keep all unique ones.\n"
+            f"2. One module-level docstring summarising the full program.\n"
+            f"3. Keep ALL functions and ALL business logic from every chunk. "
+            f"   Do not omit anything.\n"
+            f"4. If the same function appears in multiple chunks, keep the most complete "
+            f"   version (typically the one from the later chunk which has more context).\n"
+            f"5. Ensure the entry point (main() or equivalent) calls all processing "
+            f"   steps in the correct sequence.\n"
+            f"6. Preserve every {marker} comment exactly as written.\n"
+            f"7. If this is the ETL version, keep the full # ── ETL CONTRACT ── block "
+            f"   from whichever chunk has the most complete version.\n\n"
+            f"Output ONLY valid Python code. No markdown fences."
+        )
+        return self.llm.query(prompt, max_tokens=10_000)
 
     # ------------------------------------------------------------------
     # DB version
@@ -389,12 +566,22 @@ def _build_transformation_notes(
     filename: str,
     etl_ops: list[ETLOperation],
     was_truncated: bool,
+    was_chunked: bool = False,
+    chunk_count: int = 1,
 ) -> str:
     reads  = [op for op in etl_ops if op.is_read]
     writes = [op for op in etl_ops if not op.is_read]
+
+    if was_chunked:
+        size_note = f"Chunked — split into {chunk_count} chunks (DATA DIVISION shared across all)"
+    elif was_truncated:
+        size_note = "Truncated — source exceeded single-call limit; output may be incomplete"
+    else:
+        size_note = "No"
+
     lines = [
         f"Source file        : {filename}",
-        f"Source truncated   : {'Yes — output may be incomplete' if was_truncated else 'No'}",
+        f"Source truncated   : {size_note}",
         f"ETL ops detected   : {len(etl_ops)} total ({len(reads)} read, {len(writes)} write/modify)",
     ]
     if writes:
@@ -403,7 +590,7 @@ def _build_transformation_notes(
         for op in writes:
             lines.append(
                 f"  Line {op.line_number:>5}: [{op.operation_type.value:16s}] "
-                f"{op.description}  →  etl_stage_{op.table_or_file.lower()}.csv"
+                f"{op.description}  →  etl_out_{op.table_or_file.lower()}.txt"
             )
     return "\n".join(lines)
 

@@ -377,7 +377,7 @@ Cover:
                 f"Summarize this {doc.file_type.upper()} file in 150–250 words.\n"
                 f"{focus}\n"
                 f"{context_part}\n"
-                f"File: {path.name}\n\n{doc.content[:6000]}"
+                f"File: {path.name}\n\n{doc.content[:20_000]}"
             )
             summaries[path.name] = self.llm.query(prompt, max_tokens=2000)
         return summaries
