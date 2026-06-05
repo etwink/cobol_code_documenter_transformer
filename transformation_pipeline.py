@@ -193,7 +193,7 @@ class TransformationPipeline:
 
 class _DocumentationBuilder:
 
-    _TOKENS_PER_SECTION = 6_000
+    _TOKENS_PER_SECTION = 12_000
 
     # Injected into every section prompt to enforce dual-audience structure.
     _DUAL_AUDIENCE = (

@@ -124,7 +124,7 @@ Cover:
 6. Error handling: business impact of errors and the technical approach to handling them
 
 Be specific to the actual code described above."""
-        return self.llm.query(prompt, max_tokens=4000)
+        return self.llm.query(prompt, max_tokens=8000)
 
     # ------------------------------------------------------------------
     # Mixed cluster (COBOL + matching docs)
@@ -218,7 +218,7 @@ Cover:
 5. Key decision points and business rules — the rule itself and how the code enforces it
 6. Gaps or discrepancies between the documentation and the actual code behavior
 7. Error handling: business impact of errors and the technical exception paths"""
-        return self.llm.query(prompt, max_tokens=5000)
+        return self.llm.query(prompt, max_tokens=8000)
 
     # ------------------------------------------------------------------
     # Pure-doc cluster
@@ -252,7 +252,7 @@ Cover:
             "Cover: business purpose, key processes, data involved, stakeholders, and important rules.\n"
             f"{context_part}{combined}{shared_block}"
         )
-        return self.llm.query(prompt, max_tokens=4000)
+        return self.llm.query(prompt, max_tokens=8000)
 
     def _summarize_large_doc_cluster(self, cluster: DocumentCluster, context_block: str = "") -> str:
         # Summarize in batches of 4, then roll up
@@ -281,7 +281,7 @@ Cover:
             f'Combine the following batch summaries for "{cluster.cluster_name}" into one cohesive summary ({lower}–{upper} words).\n\n'
             f"{batches_text}{shared_block}"
         )
-        return self.llm.query(rollup_prompt, max_tokens=4000)
+        return self.llm.query(rollup_prompt, max_tokens=8000)
 
     # ------------------------------------------------------------------
     # Shared helpers

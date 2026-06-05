@@ -288,7 +288,7 @@ class CobolToPythonTransformer:
             f"   from whichever chunk has the most complete version.\n\n"
             f"Output ONLY valid Python code. No markdown fences."
         )
-        return self.llm.query(prompt, max_tokens=10_000)
+        return self.llm.query(prompt, max_tokens=32_000)
 
     # ------------------------------------------------------------------
     # DB version
@@ -370,7 +370,7 @@ Output ONLY valid Python code. No markdown fences. No explanatory prose outside 
 and inline comments. If the source was truncated, add a stub function with a # TODO comment
 for the missing portion."""
 
-        return self.llm.query(prompt, max_tokens=10_000)
+        return self.llm.query(prompt, max_tokens=32_000)
 
     # ------------------------------------------------------------------
     # ETL file version
@@ -489,7 +489,7 @@ OUTPUT
 Output ONLY valid Python code. No markdown fences. No explanatory prose outside
 docstrings and inline comments."""
 
-        return self.llm.query(prompt, max_tokens=10_000)
+        return self.llm.query(prompt, max_tokens=32_000)
 
     # ------------------------------------------------------------------
     # Assumptions extraction

@@ -50,7 +50,7 @@ OUTPUT_PATH: Path = (
 
 # Model settings
 MODEL_REASONING_EFFORT = os.getenv("MODEL_REASONING_EFFORT", "medium")  # low | medium | high
-MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4000"))
+MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "8000"))
 
 def validate_config():
     """Validate that all required configuration is set."""
