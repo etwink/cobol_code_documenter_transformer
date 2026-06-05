@@ -5,7 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-05 · `e109af1`
+## [Unreleased] — 2026-06-05 · `09782a9`
+
+### Fixed — Large COBOL files truncated in generated output
+- `cobol_transformer.py`: raised `_MAX_SOURCE_CHARS` from 14,000 to 150,000 — gpt-5-mini supports 272k input tokens (~1.09M chars); the old limit caused unnecessary `# TODO: truncated` warnings for typical large programs (e.g. the 35,230-char file that triggered this fix)
+
+### Added — Chunked transformation for very large files (> 150k chars)
+- `cobol_transformer.py`: `_split_into_chunks()` — finds the PROCEDURE DIVISION, keeps the full header block (IDENTIFICATION, ENVIRONMENT, DATA divisions) in every chunk so data definitions are always in scope, then splits the PROCEDURE DIVISION at paragraph/section boundaries with 3,000-char overlap; falls back to character-based splitting if no boundaries found
+- `cobol_transformer.py`: `_transform_chunked()` — calls DB or ETL generation on each chunk independently, then synthesizes results
+- `cobol_transformer.py`: `_synthesize_chunks()` — merges chunk-generated Python by deduplicating imports and helpers while preserving all business logic and every `# DB_OPERATION:` / `# ETL_INPUT:` / `# ETL_OUTPUT:` comment
+- `cobol_transformer.py`: transformation notes now distinguish between chunked, truncated, and normal processing
+- `hierarchical_summarizer.py`: individual file summary content limit raised from 6,000 to 20,000 chars so cluster summaries for large COBOL files see meaningful content beyond the opening declarations
+
+---
+
+## [0.8.0] — 2026-06-05 · `e109af1`
 
 ### Changed — Simplified pipeline entry point
 - `transformation_pipeline.py`: `run()` now takes `input_path: str | Path` (singular) instead of `input_paths: list[str | Path]` — the pipeline always processes one directory; the list form was misleading and caused confusion between `config.DOCUMENTS_PATH` (string) and `config.DOCUMENTS_PATHS` (list)
