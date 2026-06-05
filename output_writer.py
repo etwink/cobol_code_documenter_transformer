@@ -67,9 +67,17 @@ class OutputWriter:
             written.append(str(csv_path))
 
         # ── Per-version package files ─────────────────────────────────────────
-        for path, err in self._write_db_package_files(output.transformations):
+        # Derive the authoritative entry point from cluster summaries — the
+        # program that is never called by any other program in the dependency
+        # graph.  This is more reliable than searching generated code for
+        # "if __name__ == '__main__':" which the LLM may or may not produce.
+        entry_point = next(
+            (cs.entry_point.lower() for cs in output.cluster_summaries if cs.entry_point),
+            None,
+        )
+        for path, err in self._write_db_package_files(output.transformations, entry_point):
             (failed if err else written).append(str(path) + (f" — {err}" if err else ""))
-        for path, err in self._write_etl_package_files(output.transformations, output.all_etl_operations):
+        for path, err in self._write_etl_package_files(output.transformations, output.all_etl_operations, entry_point):
             (failed if err else written).append(str(path) + (f" — {err}" if err else ""))
 
         # ── Markdown documentation ────────────────────────────────────────────
@@ -104,25 +112,28 @@ class OutputWriter:
     # ── Per-version package files ────────────────────────────────────────────
 
     def _write_db_package_files(
-        self, transformations: list[PythonTransformationResult]
+        self,
+        transformations: list[PythonTransformationResult],
+        entry_point: str | None,
     ) -> list[tuple[Path, str | None]]:
         db_dir = self.output_dir / "python_db"
         return [
-            _safe_write(db_dir / "__init__.py",    _build_db_init(transformations)),
-            _safe_write(db_dir / "requirements.txt", _DB_REQUIREMENTS),
-            _safe_write(db_dir / "quickstart.md",  _build_db_quickstart(transformations)),
+            _safe_write(db_dir / "__init__.py",      _build_db_init(transformations)),
+            _safe_write(db_dir / "requirements.txt",  _DB_REQUIREMENTS),
+            _safe_write(db_dir / "quickstart.md",    _build_db_quickstart(transformations, entry_point)),
         ]
 
     def _write_etl_package_files(
         self,
         transformations: list[PythonTransformationResult],
         all_etl_ops: list[ETLOperation],
+        entry_point: str | None,
     ) -> list[tuple[Path, str | None]]:
         etl_dir = self.output_dir / "python_etl"
         return [
-            _safe_write(etl_dir / "__init__.py",    _build_etl_init(transformations)),
-            _safe_write(etl_dir / "requirements.txt", _ETL_REQUIREMENTS),
-            _safe_write(etl_dir / "quickstart.md",  _build_etl_quickstart(transformations, all_etl_ops)),
+            _safe_write(etl_dir / "__init__.py",      _build_etl_init(transformations)),
+            _safe_write(etl_dir / "requirements.txt",  _ETL_REQUIREMENTS),
+            _safe_write(etl_dir / "quickstart.md",    _build_etl_quickstart(transformations, all_etl_ops, entry_point)),
         ]
 
     def _write_etl_csv(
@@ -379,13 +390,15 @@ def _build_etl_init(transformations: list[PythonTransformationResult]) -> str:
     )
 
 
-def _build_db_quickstart(transformations: list[PythonTransformationResult]) -> str:
+def _build_db_quickstart(
+    transformations: list[PythonTransformationResult],
+    entry_point: str | None,
+) -> str:
     modules = [_safe_stem(t.source_file) for t in transformations]
-    entry   = next(
-        (m for t in transformations for m in [_safe_stem(t.source_file)]
-         if "__main__" in t.python_db_code or "if __name__" in t.python_db_code),
-        modules[0] if modules else "<entry_module>",
-    )
+    # Use the dependency-graph entry point (program never called by others).
+    # Fall back to the first module alphabetically only when no entry point
+    # could be determined from the dependency graph.
+    entry = entry_point or (modules[0] if modules else "<entry_module>")
     module_list = "\n".join(f"- `{m}.py`" for m in modules)
 
     return f"""\
@@ -446,13 +459,10 @@ entry point above, which orchestrates the full flow.
 def _build_etl_quickstart(
     transformations: list[PythonTransformationResult],
     all_etl_ops: list[ETLOperation],
+    entry_point: str | None,
 ) -> str:
     modules = [_safe_stem(t.source_file) for t in transformations]
-    entry   = next(
-        (m for t in transformations for m in [_safe_stem(t.source_file)]
-         if "__main__" in t.python_etl_code or "if __name__" in t.python_etl_code),
-        modules[0] if modules else "<entry_module>",
-    )
+    entry = entry_point or (modules[0] if modules else "<entry_module>")
     module_list = "\n".join(f"- `{m}.py`" for m in modules)
 
     read_ops  = [op for op in all_etl_ops if op.is_read]

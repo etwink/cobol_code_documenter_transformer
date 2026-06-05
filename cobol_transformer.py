@@ -98,7 +98,7 @@ class CobolToPythonTransformer:
                 label="ETL version",
             )
 
-        assumptions = self._call_assumptions(source[:8_000], *common_args[:2])
+        assumptions = self._call_assumptions(source[:8_000], *common_args[:3])
         notes = _build_transformation_notes(cobol_path.name, etl_ops, was_truncated, is_chunked, len(chunks))
 
         return PythonTransformationResult(
