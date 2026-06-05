@@ -37,6 +37,17 @@ DOCUMENTS_PATHS = [
     Path(p.strip()) for p in DOCUMENTS_PATH.split(",") if p.strip()
 ] if DOCUMENTS_PATH else []
 
+# Output directory — written inside the first DOCUMENTS_PATH folder so output
+# is co-located with inputs.  The leading underscore and specific name make it
+# visually distinct from source files and prevent it being re-scanned on the
+# next run (the pipeline excludes this folder from the scan automatically).
+OUTPUT_DIR_NAME = "_cobol_transformer_output"
+OUTPUT_PATH: Path = (
+    DOCUMENTS_PATHS[0] / OUTPUT_DIR_NAME
+    if DOCUMENTS_PATHS
+    else Path(OUTPUT_DIR_NAME)
+)
+
 # Model settings
 MODEL_REASONING_EFFORT = os.getenv("MODEL_REASONING_EFFORT", "medium")  # low | medium | high
 MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "4000"))

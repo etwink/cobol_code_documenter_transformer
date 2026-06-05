@@ -75,6 +75,7 @@ class TransformationPipeline:
         input_paths: list[str | Path],
         recursive: bool = True,
         progress_callback=None,
+        output_dir: Path | str | None = None,
     ) -> TransformationOutput:
         """
         Run the full pipeline.
@@ -90,7 +91,11 @@ class TransformationPipeline:
         _progress("Scanning files", 0, 1)
         scanner = FolderScanner()
         resolved = [Path(p).resolve() for p in input_paths]
-        scanned = scanner.scan(resolved, recursive=recursive)
+        # Exclude the output directory so re-runs don't pick up generated files
+        exclude: set[Path] = set()
+        if output_dir:
+            exclude.add(Path(output_dir).resolve())
+        scanned = scanner.scan(resolved, recursive=recursive, exclude_paths=exclude)
         _progress(f"Scan complete — {scanned.summary()}", 1, 1)
 
         if not scanned.cobol:

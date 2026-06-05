@@ -76,17 +76,24 @@ import config
 def on_progress(stage: str, current: int, total: int) -> None:
     print(f"  [{current}/{total}] {stage}")
 
+# Output goes into a dedicated subfolder inside DOCUMENTS_PATH so it stays
+# co-located with the source files.  The pipeline automatically excludes this
+# folder from scanning, so re-running will not pick up the generated Python files.
+output_dir = config.OUTPUT_PATH
+
 pipeline = TransformationPipeline(
     context_block=""  # optional — see Step 5
 )
 
+print(f"Output will be written to: {output_dir}")
 print("Running transformation pipeline...")
 output = pipeline.run(
     input_paths=config.DOCUMENTS_PATHS or [Path(".")],
+    output_dir=output_dir,
     progress_callback=on_progress,
 )
 
-writer = OutputWriter(output_dir=Path("output"))
+writer = OutputWriter(output_dir=output_dir)
 report = writer.write(output)
 
 print(f"\n{report}")
@@ -121,17 +128,26 @@ If you have no prior knowledge, leave it as an empty string. The Assumptions sec
 
 ## What You Get
 
-After the run, the `output/` folder contains:
+After the run, a `_cobol_transformer_output/` folder is created **inside your `DOCUMENTS_PATH`**:
 
 ```
-output/
-├── python_db/
-│   └── <program_name>.py      # Python with real SQLAlchemy database calls
-├── python_etl/
-│   └── <program_name>.py      # Python that stages writes to CSV files
-├── documentation.md           # Full technical document
-└── etl_operations.csv         # Every detected database/file operation
+<DOCUMENTS_PATH>/
+└── _cobol_transformer_output/
+    ├── python_db/
+    │   ├── __init__.py
+    │   ├── requirements.txt
+    │   ├── quickstart.md
+    │   └── <program_name>.py      # Python with real SQLAlchemy database calls
+    ├── python_etl/
+    │   ├── __init__.py
+    │   ├── requirements.txt
+    │   ├── quickstart.md
+    │   └── <program_name>.py      # Python with pipe-delimited file I/O for ETL
+    ├── documentation.md           # Full technical document
+    └── etl_operations.csv         # Every detected database/file operation
 ```
+
+The folder name starts with `_` and is excluded from the scanner automatically — re-running the pipeline will not pick up the generated Python files as source code.
 
 Open `documentation.md` in any Markdown viewer (VS Code, GitHub, Obsidian) to read the full document. The key sections to review first:
 

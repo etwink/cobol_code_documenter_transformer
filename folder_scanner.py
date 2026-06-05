@@ -63,9 +63,22 @@ class ScannedDocuments:
 class FolderScanner:
     """Scan one or more directories for supported file types."""
 
-    def scan(self, paths: list[Path | str], recursive: bool = True) -> ScannedDocuments:
+    def scan(
+        self,
+        paths: list[Path | str],
+        recursive: bool = True,
+        exclude_paths: set[Path] | None = None,
+    ) -> ScannedDocuments:
+        """
+        Scan *paths* for supported file types.
+
+        exclude_paths: resolved absolute paths of directories to skip entirely.
+        Use this to prevent the output folder from being re-scanned on a
+        subsequent run (generated .py files would otherwise appear as code files).
+        """
         result = ScannedDocuments()
         seen: set[Path] = set()
+        excluded = {p.resolve() for p in (exclude_paths or set())}
 
         for root in paths:
             root = Path(root)
@@ -74,13 +87,22 @@ class FolderScanner:
 
             if recursive:
                 # os.walk() is reliable across all Python versions and OS platforms;
-                # Path.glob("**/*") has known issues on Windows with some directory structures.
-                for dirpath, _, filenames in os.walk(root):
+                # Path.glob("**/*") has known issues on Windows with certain structures.
+                for dirpath, dirnames, filenames in os.walk(root):
+                    current = Path(dirpath).resolve()
+                    if current in excluded:
+                        dirnames.clear()  # prevent os.walk from descending further
+                        continue
+                    # Prune any subdirectory that is in the exclusion set before descent
+                    dirnames[:] = [
+                        d for d in dirnames
+                        if (current / d).resolve() not in excluded
+                    ]
                     for filename in sorted(filenames):
                         self._categorize(Path(dirpath) / filename, result, seen)
             else:
                 for p in sorted(root.iterdir()):
-                    if p.is_file():
+                    if p.is_file() and p.resolve() not in excluded:
                         self._categorize(p, result, seen)
 
         return result
