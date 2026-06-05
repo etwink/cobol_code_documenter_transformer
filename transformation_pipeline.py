@@ -72,16 +72,19 @@ class TransformationPipeline:
 
     def run(
         self,
-        input_paths: list[str | Path],
+        input_path: str | Path,
         recursive: bool = True,
         progress_callback=None,
         output_dir: Path | str | None = None,
     ) -> TransformationOutput:
         """
-        Run the full pipeline.
+        Run the full pipeline against a single input directory.
 
-        progress_callback(stage: str, current: int, total: int) is called
-        at key milestones if provided.
+        input_path:       the directory containing COBOL source files and docs.
+        output_dir:       where to write results; when provided the pipeline
+                          automatically excludes it from the scan so re-runs
+                          do not pick up previously generated Python files.
+        progress_callback(stage, current, total) is called at key milestones.
         """
         def _progress(stage: str, current: int, total: int) -> None:
             if progress_callback:
@@ -90,7 +93,7 @@ class TransformationPipeline:
         # ── 1. Scan input files ──────────────────────────────────────────────
         _progress("Scanning files", 0, 1)
         scanner = FolderScanner()
-        resolved = [Path(p).resolve() for p in input_paths]
+        resolved = [Path(input_path).resolve()]
         # Exclude the output directory so re-runs don't pick up generated files
         exclude: set[Path] = set()
         if output_dir:

@@ -88,7 +88,7 @@ pipeline = TransformationPipeline(
 print(f"Output will be written to: {output_dir}")
 print("Running transformation pipeline...")
 output = pipeline.run(
-    input_paths=config.DOCUMENTS_PATHS or [Path(".")],
+    input_path=config.DOCUMENTS_PATH or ".",
     output_dir=output_dir,
     progress_callback=on_progress,
 )

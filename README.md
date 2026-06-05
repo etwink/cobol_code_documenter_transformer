@@ -182,7 +182,7 @@ pipeline = TransformationPipeline(
     )
 )
 
-output = pipeline.run(["C:/cobol/source", "C:/cobol/docs"])
+output = pipeline.run("C:/cobol/source")
 
 writer = OutputWriter(output_dir=Path("output"))
 writer.write(output)
@@ -197,7 +197,7 @@ def on_progress(stage: str, current: int, total: int) -> None:
     print(f"[{current}/{total}] {stage}")
 
 output = pipeline.run(
-    input_paths=["C:/cobol/source"],
+    input_path="C:/cobol/source",
     progress_callback=on_progress,
 )
 ```
