@@ -5,7 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-05 · `8007f77`
+## [Unreleased] — 2026-06-05 · `175e2b9`
+
+### Fixed — Quickstart shows wrong entry point module
+- `output_writer.py`: replaced fragile `"__main__" in generated_code` string search with the authoritative `ClusterSummary.entry_point` value — the program that is never called by any other program in the COBOL dependency graph; the LLM may or may not emit `if __name__ == "__main__":` so string-searching generated code is unreliable
+- `output_writer.py`: `entry_point` is now plumbed through `write()` → `_write_db/etl_package_files()` → `_build_db/etl_quickstart()` so both quickstart files always use the correct module; falls back to the first module alphabetically when no entry point exists (e.g. all files are copybooks/utilities)
+
+### Fixed — Assumptions section always empty
+- `cobol_transformer.py`: `_call_assumptions` was called with `*common_args[:2]` (only `filename` and `dep_ctx`) but `_extract_assumptions` requires four arguments; the `except` clause silently swallowed the `TypeError` and returned `[]`; fixed to `*common_args[:3]` to include `doc_ctx`
+
+---
+
+## [1.0.0] — 2026-06-05 · `8007f77`
 
 ### Fixed — Generated Python output truncated mid-file
 - Root cause: gpt-5-mini has 128k output tokens shared with reasoning; `MODEL_REASONING_EFFORT=medium` consumes ~20-30k reasoning tokens, leaving only ~5-7k tokens for actual code output at the old 10k limit — not enough for a large converted module
