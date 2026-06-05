@@ -5,7 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-05 · `09782a9`
+## [Unreleased] — 2026-06-05 · `8007f77`
+
+### Fixed — Generated Python output truncated mid-file
+- Root cause: gpt-5-mini has 128k output tokens shared with reasoning; `MODEL_REASONING_EFFORT=medium` consumes ~20-30k reasoning tokens, leaving only ~5-7k tokens for actual code output at the old 10k limit — not enough for a large converted module
+- `cobol_transformer.py`: raised all code-generation calls (DB version, ETL version, chunk synthesis) from `max_tokens=10,000` to `max_tokens=32,000` — 32k tokens ≈ 128k chars of Python output, enough for any single module
+- `transformation_pipeline.py`: raised `_TOKENS_PER_SECTION` from 6,000 to 12,000 so documentation sections are not cut off mid-paragraph
+- `hierarchical_summarizer.py`: raised synthesis calls from 4,000/5,000 to 8,000 so COBOL cluster summaries are complete
+- `config.py` / `.env.example`: raised `MODEL_MAX_TOKENS` default from 4,000 to 8,000; added explanation of reasoning token sharing
+
+---
+
+## [0.9.0] — 2026-06-05 · `09782a9`
 
 ### Fixed — Large COBOL files truncated in generated output
 - `cobol_transformer.py`: raised `_MAX_SOURCE_CHARS` from 14,000 to 150,000 — gpt-5-mini supports 272k input tokens (~1.09M chars); the old limit caused unnecessary `# TODO: truncated` warnings for typical large programs (e.g. the 35,230-char file that triggered this fix)
