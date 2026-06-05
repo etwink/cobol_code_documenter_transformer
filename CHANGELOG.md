@@ -5,7 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-04 · `66b24e2`
+## [Unreleased] — 2026-06-05 · `d99386d`
+
+### Changed — Output directory location
+- `config.py`: new `OUTPUT_DIR_NAME = "_cobol_transformer_output"` and `OUTPUT_PATH` — the output folder is now written inside the first `DOCUMENTS_PATH` entry so it stays co-located with the source files; falls back to a local `_cobol_transformer_output/` folder if `DOCUMENTS_PATH` is not set
+- `folder_scanner.py`: new `exclude_paths` parameter on `scan()` — a set of resolved absolute paths to skip entirely; matched directories are pruned from `os.walk()` before descent so re-running the pipeline never picks up generated `.py` files as source code
+- `transformation_pipeline.py`: new `output_dir` parameter on `run()`; when provided, its resolved path is automatically added to the scanner exclusion set
+- `quickstart.md`: `run.py` example updated to use `config.OUTPUT_PATH`; "What You Get" section updated to show the new folder structure
+- `.env.example`: added comment on `DOCUMENTS_PATH` explaining where output is written
+
+---
+
+## [0.6.0] — 2026-06-04 · `66b24e2`
 
 ### Changed — Connected system architecture
 - `cobol_transformer.py`: new `system_context` parameter on `transform()` — a map of every program in the scan and its Python module name; injected into DB and ETL version prompts so the LLM generates correct relative imports (`from . import <module>`) for CALL/COPY dependencies
