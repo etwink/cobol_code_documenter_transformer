@@ -5,7 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-05 · `d99386d`
+## [Unreleased] — 2026-06-05 · `e109af1`
+
+### Changed — Simplified pipeline entry point
+- `transformation_pipeline.py`: `run()` now takes `input_path: str | Path` (singular) instead of `input_paths: list[str | Path]` — the pipeline always processes one directory; the list form was misleading and caused confusion between `config.DOCUMENTS_PATH` (string) and `config.DOCUMENTS_PATHS` (list)
+- `quickstart.md` / `README.md`: updated all examples to use `input_path=config.DOCUMENTS_PATH`
+
+---
+
+## [0.7.0] — 2026-06-05 · `d99386d`
 
 ### Changed — Output directory location
 - `config.py`: new `OUTPUT_DIR_NAME = "_cobol_transformer_output"` and `OUTPUT_PATH` — the output folder is now written inside the first `DOCUMENTS_PATH` entry so it stays co-located with the source files; falls back to a local `_cobol_transformer_output/` folder if `DOCUMENTS_PATH` is not set
