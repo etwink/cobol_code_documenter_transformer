@@ -94,7 +94,8 @@ class CobolToPythonTransformer:
             )
             etl_code = self._call_llm(
                 self._generate_etl_version,
-                src, *common_args, etl_ops, was_truncated,
+                src, cobol_path.name, dependency_context, documentation_context,
+                etl_ops, system_context, was_truncated,
                 label="ETL version",
             )
 
