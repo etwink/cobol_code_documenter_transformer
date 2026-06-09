@@ -5,7 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-05 · `175e2b9`
+## [Unreleased] — 2026-06-09 · `66c2c46`
+
+### Fixed — ETL Python files contained error comments instead of code
+- `cobol_transformer.py`: `*common_args` expansion placed `system_context` (a `str`) into the `etl_ops` parameter of `_generate_etl_version` and the actual `etl_ops` list into `sys_ctx`; iterating over the string characters and calling `.is_read` raised `AttributeError: 'str' object has no attribute 'is_read'`; `_call_llm` caught this and wrote the error as a Python comment, so no ETL code was ever generated — fixed by expanding args explicitly in the correct order; the chunked path was unaffected as it uses `etl_ops=etl_ops` keyword argument
+
+---
+
+## [1.1.0] — 2026-06-05 · `175e2b9`
 
 ### Fixed — Quickstart shows wrong entry point module
 - `output_writer.py`: replaced fragile `"__main__" in generated_code` string search with the authoritative `ClusterSummary.entry_point` value — the program that is never called by any other program in the COBOL dependency graph; the LLM may or may not emit `if __name__ == "__main__":` so string-searching generated code is unreliable
