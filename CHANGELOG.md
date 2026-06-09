@@ -5,7 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-09 · `66c2c46`
+## [Unreleased] — 2026-06-09 · `8645712`
+
+### Fixed — Duplicate ETL entries for same cursor/file
+- `etl_detector.py`: new `_deduplicate()` method runs three passes after extraction:
+  1. Drop `FILE_OPEN` and `FILE_CLOSE` when `FILE_READ` or `FILE_WRITE` exists for the same file — they are pure infrastructure with no ETL value
+  2. For `SQL_CURSOR` (`OPEN`/`FETCH`/`CLOSE`), keep only the first per cursor name — the `DECLARE CURSOR` is already captured as `SQL_SELECT` with the real table name; the lifecycle ops were generating spurious duplicate input-file entries
+  3. For each `(table_or_file, is_read)` pair, keep only the highest-priority operation type using the new `_OP_PRIORITY` ranking (`SQL_SELECT=10` > `FILE_READ=8` > `SQL_CURSOR=5` > `FILE_OPEN/CLOSE=1`)
+
+### Improved — ETL quickstart format
+- `output_writer.py`: each unique ETL file now appears exactly once in the "Before Running" and "After Running" sections; the originating COBOL `EXEC SQL` statement is shown inline beneath the filename for SQL operations so the ETL engineer can see exactly what data is expected
+- `output_writer.py`: ETL job specifications deduplicated to one spec per unique file
+- Added `_unique_by_filename()`, `_format_etl_file_entry()`, and `_sql_hint()` helpers
+
+---
+
+## [1.2.0] — 2026-06-09 · `66c2c46`
 
 ### Fixed — ETL Python files contained error comments instead of code
 - `cobol_transformer.py`: `*common_args` expansion placed `system_context` (a `str`) into the `etl_ops` parameter of `_generate_etl_version` and the actual `etl_ops` list into `sys_ctx`; iterating over the string characters and calling `.is_read` raised `AttributeError: 'str' object has no attribute 'is_read'`; `_call_llm` caught this and wrote the error as a Python comment, so no ETL code was ever generated — fixed by expanding args explicitly in the correct order; the chunked path was unaffected as it uses `etl_ops=etl_ops` keyword argument
