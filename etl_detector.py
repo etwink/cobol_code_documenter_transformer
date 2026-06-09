@@ -160,6 +160,26 @@ _FILE_PATTERNS: list[tuple[OperationType, re.Pattern]] = [
 
 _ALL_PATTERNS = _SQL_PATTERNS + _CICS_PATTERNS + _FILE_PATTERNS
 
+# How semantically informative each operation type is.
+# Used to keep the best representative when collapsing duplicates:
+# a SQL_SELECT tells us more than a SQL_CURSOR (OPEN/FETCH) on the same target;
+# a FILE_READ tells us more than FILE_OPEN or FILE_CLOSE.
+_OP_PRIORITY: dict[OperationType, int] = {
+    OperationType.SQL_SELECT:   10,
+    OperationType.SQL_INSERT:   10,
+    OperationType.SQL_UPDATE:   10,
+    OperationType.SQL_DELETE:   10,
+    OperationType.CICS_READ:     9,
+    OperationType.CICS_WRITE:    9,
+    OperationType.CICS_REWRITE:  9,
+    OperationType.CICS_DELETE:   9,
+    OperationType.FILE_READ:     8,
+    OperationType.FILE_WRITE:    8,
+    OperationType.SQL_CURSOR:    5,  # cursor lifecycle — less informative than SELECT
+    OperationType.FILE_OPEN:     1,  # pure infrastructure — dropped when READ/WRITE exists
+    OperationType.FILE_CLOSE:    1,  # pure infrastructure — dropped when READ/WRITE exists
+}
+
 _DESCRIPTIONS: dict[OperationType, str] = {
     OperationType.SQL_SELECT:   "Read data from table {t}",
     OperationType.SQL_INSERT:   "Insert record into table {t}",
@@ -211,15 +231,70 @@ class ETLDetector:
                     )
                 )
 
-        # Stable order by line number; de-duplicate exact (type, line) pairs
-        seen: set[tuple[OperationType, int]] = set()
-        unique: list[ETLOperation] = []
+        # Sort by line number; remove exact (type, line) duplicates first
+        seen_exact: set[tuple[OperationType, int]] = set()
+        sorted_ops: list[ETLOperation] = []
         for op in sorted(operations, key=lambda o: o.line_number):
             key = (op.operation_type, op.line_number)
-            if key not in seen:
-                seen.add(key)
-                unique.append(op)
-        return unique
+            if key not in seen_exact:
+                seen_exact.add(key)
+                sorted_ops.append(op)
+
+        return self._deduplicate(sorted_ops)
+
+    def _deduplicate(self, operations: list[ETLOperation]) -> list[ETLOperation]:
+        """Collapse redundant operations so each logical data source/target appears once.
+
+        Three passes:
+
+        1. FILE_OPEN and FILE_CLOSE are pure infrastructure. Drop them when a
+           FILE_READ or FILE_WRITE already exists for the same file name — they
+           add no information beyond "the file was touched".
+
+        2. SQL_CURSOR (OPEN / FETCH / CLOSE on the same cursor name): keep only
+           the first occurrence. The DECLARE CURSOR statement is matched as a
+           SQL_SELECT (it contains the real table name); the subsequent lifecycle
+           verbs are implementation detail that would otherwise generate spurious
+           duplicate ETL file entries.
+
+        3. General dedup: for each (table_or_file, is_read) pair keep only the
+           highest-priority operation type. If two ops have the same priority
+           (same type, different lines), keep the one with the lower line number.
+        """
+        # Pass 1: find file names that already have substantive ops
+        substantive_files: set[str] = {
+            op.table_or_file
+            for op in operations
+            if op.operation_type in (OperationType.FILE_READ, OperationType.FILE_WRITE)
+        }
+
+        # Pass 2: filter infrastructure and cursor dupes
+        seen_cursors: set[str] = set()
+        filtered: list[ETLOperation] = []
+        for op in operations:
+            if op.operation_type in (OperationType.FILE_OPEN, OperationType.FILE_CLOSE):
+                if op.table_or_file in substantive_files:
+                    continue   # drop — FILE_READ/WRITE already covers this file
+
+            if op.operation_type == OperationType.SQL_CURSOR:
+                if op.table_or_file in seen_cursors:
+                    continue   # drop — already have one entry for this cursor
+                seen_cursors.add(op.table_or_file)
+
+            filtered.append(op)
+
+        # Pass 3: keep best (highest priority) per (table_or_file, is_read)
+        best: dict[tuple[str, bool], ETLOperation] = {}
+        for op in filtered:
+            key = (op.table_or_file, op.is_read)
+            existing = best.get(key)
+            if existing is None:
+                best[key] = op
+            else:
+                if _OP_PRIORITY.get(op.operation_type, 0) > _OP_PRIORITY.get(existing.operation_type, 0):
+                    best[key] = op
+
+        return sorted(best.values(), key=lambda o: o.line_number)
 
     def extract_from_file(self, path: Path) -> list[ETLOperation]:
         source = _read_cobol(path)

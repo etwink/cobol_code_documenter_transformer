@@ -275,6 +275,48 @@ def _build_markdown(
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _unique_by_filename(
+    ops: list[ETLOperation], prefix: str
+) -> list[ETLOperation]:
+    """Return ops deduplicated by ETL filename, keeping first occurrence."""
+    seen: set[str] = set()
+    result: list[ETLOperation] = []
+    for op in ops:
+        fname = f"{prefix}{op.table_or_file.lower()}.txt"
+        if fname not in seen:
+            seen.add(fname)
+            result.append(op)
+    return result
+
+
+def _format_etl_file_entry(op: ETLOperation, direction: str) -> str:
+    """Format one ETL file entry for the quickstart, including SQL context."""
+    prefix = "etl_in_" if direction == "in" else "etl_out_"
+    fname = f"{prefix}{op.table_or_file.lower()}.txt"
+    lines = [f"- `{fname}` — {op.description}"]
+    sql = _sql_hint(op)
+    if sql:
+        lines.append(f"  {sql.strip()}")
+    return "\n".join(lines)
+
+
+def _sql_hint(op: ETLOperation) -> str:
+    """Return a formatted SQL/COBOL hint line if the operation has a useful raw statement."""
+    from etl_detector import OperationType
+    sql_types = {
+        OperationType.SQL_SELECT,
+        OperationType.SQL_INSERT,
+        OperationType.SQL_UPDATE,
+        OperationType.SQL_DELETE,
+    }
+    if op.operation_type not in sql_types:
+        return ""
+    stmt = op.raw_statement.strip()
+    if not stmt:
+        return ""
+    return f"- COBOL SQL: `{stmt}`\n"
+
+
 def _safe_stem(source_file: str) -> str:
     """
     Extract a safe lowercase filename stem from a source file path string.
@@ -465,35 +507,39 @@ def _build_etl_quickstart(
     entry = entry_point or (modules[0] if modules else "<entry_module>")
     module_list = "\n".join(f"- `{m}.py`" for m in modules)
 
-    read_ops  = [op for op in all_etl_ops if op.is_read]
-    write_ops = [op for op in all_etl_ops if not op.is_read]
+    # Deduplicate by filename — the ETL detector collapses most duplicates
+    # already, but this ensures the quickstart is clean even if residual
+    # duplicates arrive (e.g. same table accessed by two different modules).
+    read_ops  = _unique_by_filename(
+        [op for op in all_etl_ops if op.is_read],
+        prefix="etl_in_",
+    )
+    write_ops = _unique_by_filename(
+        [op for op in all_etl_ops if not op.is_read],
+        prefix="etl_out_",
+    )
 
-    input_files = "\n".join(
-        f"- `etl_in_{op.table_or_file.lower()}.txt` — {op.description}"
-        for op in read_ops
-    ) or "_None detected._"
-
-    output_files = "\n".join(
-        f"- `etl_out_{op.table_or_file.lower()}.txt` — {op.description}"
-        for op in write_ops
-    ) or "_None detected._"
+    input_files  = "\n\n".join(_format_etl_file_entry(op, "in")  for op in read_ops)  or "_None detected._"
+    output_files = "\n\n".join(_format_etl_file_entry(op, "out") for op in write_ops) or "_None detected._"
 
     etl_job_specs = []
     for op in read_ops:
         fname = f"etl_in_{op.table_or_file.lower()}.txt"
+        sql_hint = _sql_hint(op)
         etl_job_specs.append(
             f"**Input job for `{fname}`**\n"
-            f"- Query: `SELECT <columns> FROM {op.table_or_file}`\n"
-            f"- Write results to `{fname}` as pipe-delimited UTF-8 text with a header row.\n"
+            f"- Source: {op.description}\n"
+            f"{sql_hint}"
+            f"- Write results to `{fname}` as pipe-delimited (`|`) UTF-8 text with a header row.\n"
             f"- This file **must exist before** the Python module runs.\n"
         )
     for op in write_ops:
         fname = f"etl_out_{op.table_or_file.lower()}.txt"
         etl_job_specs.append(
             f"**Output job for `{fname}`**\n"
-            f"- Read `{fname}` (pipe-delimited, header row).\n"
-            f"- Perform: `{op.operation_type.value}` on `{op.table_or_file}`.\n"
-            f"- This file is produced **after** the Python module runs.\n"
+            f"- Action: `{op.operation_type.value}` on `{op.table_or_file}`\n"
+            f"- Read `{fname}` (pipe-delimited, header row) after the Python module runs.\n"
+            f"- Apply each row as the indicated operation to the target table/dataset.\n"
         )
     etl_specs_block = "\n\n".join(etl_job_specs) or "_No ETL jobs required for this system._"
 
