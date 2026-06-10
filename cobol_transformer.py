@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from llm_integration import AzureLLMClient
-from etl_detector import ETLDetector, ETLOperation, etl_operations_summary
+from etl_detector import ETLDetector, ETLOperation
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +61,7 @@ class CobolToPythonTransformer:
         dependency_context: str = "",
         documentation_context: str = "",
         system_context: str = "",
+        known_interfaces: str = "",
     ) -> PythonTransformationResult:
         """Transform one COBOL file into both Python variants.
 
@@ -68,8 +69,10 @@ class CobolToPythonTransformer:
         still run and the error is embedded as a comment in the output file
         rather than crashing the pipeline.
 
-        system_context: a map of all programs in the system with their Python
-        module names — used to generate correct inter-module imports.
+        system_context:    a map of all programs in the system with their Python
+                           module names — used to generate correct inter-module imports.
+        known_interfaces:  extracted function signatures of already-transformed
+                           dependencies so the LLM uses exact call signatures.
         """
         source = _read_cobol(cobol_path)
         # ETL detection always runs on the full source (regex, no token limit)
@@ -83,19 +86,19 @@ class CobolToPythonTransformer:
         common_args = (cobol_path.name, dependency_context, documentation_context, system_context)
 
         if is_chunked:
-            db_code  = self._transform_chunked("db",  chunks, *common_args, etl_ops=etl_ops)
-            etl_code = self._transform_chunked("etl", chunks, *common_args, etl_ops=etl_ops)
+            db_code  = self._transform_chunked("db",  chunks, *common_args, etl_ops=etl_ops, known_interfaces=known_interfaces)
+            etl_code = self._transform_chunked("etl", chunks, *common_args, etl_ops=etl_ops, known_interfaces=known_interfaces)
         else:
             src = source[: self._MAX_SOURCE_CHARS]
             db_code = self._call_llm(
                 self._generate_db_version,
-                src, *common_args, was_truncated,
+                src, *common_args, known_interfaces, was_truncated,
                 label="DB version",
             )
             etl_code = self._call_llm(
                 self._generate_etl_version,
                 src, cobol_path.name, dependency_context, documentation_context,
-                etl_ops, system_context, was_truncated,
+                etl_ops, system_context, known_interfaces, was_truncated,
                 label="ETL version",
             )
 
@@ -225,6 +228,8 @@ class CobolToPythonTransformer:
         doc_ctx: str,
         sys_ctx: str,
         etl_ops: list[ETLOperation],
+        *,
+        known_interfaces: str = "",
     ) -> str:
         """Transform each chunk independently then synthesize into one module."""
         chunk_results: list[str] = []
@@ -235,13 +240,13 @@ class CobolToPythonTransformer:
             if version == "db":
                 code = self._call_llm(
                     self._generate_db_version,
-                    chunk, filename, dep_ctx, doc_ctx, sys_ctx, False,
+                    chunk, filename, dep_ctx, doc_ctx, sys_ctx, known_interfaces, False,
                     label=f"DB version {chunk_label}",
                 )
             else:
                 code = self._call_llm(
                     self._generate_etl_version,
-                    chunk, filename, dep_ctx, doc_ctx, etl_ops, sys_ctx, False,
+                    chunk, filename, dep_ctx, doc_ctx, etl_ops, sys_ctx, known_interfaces, False,
                     label=f"ETL version {chunk_label}",
                 )
             chunk_results.append(code)
@@ -302,12 +307,14 @@ class CobolToPythonTransformer:
         dep_ctx: str,
         doc_ctx: str,
         sys_ctx: str,
+        known_interfaces: str,
         was_truncated: bool,
     ) -> str:
-        dep_block = f"\n\nDependency context (which programs this one CALLs or COPYs):\n{dep_ctx}" if dep_ctx else ""
-        doc_block = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
-        sys_block = f"\n\nSYSTEM MAP — all programs in this system and their Python module names:\n{sys_ctx}" if sys_ctx else ""
-        trunc_note = (
+        dep_block   = f"\n\nDependency context (which programs this one CALLs or COPYs):\n{dep_ctx}" if dep_ctx else ""
+        doc_block   = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
+        sys_block   = f"\n\nSYSTEM MAP — all programs in this system and their Python module names:\n{sys_ctx}" if sys_ctx else ""
+        iface_block = f"\n\n{known_interfaces}" if known_interfaces else ""
+        trunc_note  = (
             "\n\n# NOTE: The COBOL source was truncated for the LLM call. "
             "Remaining sections are represented by the stub below."
             if was_truncated else ""
@@ -315,7 +322,7 @@ class CobolToPythonTransformer:
 
         prompt = f"""You are a senior developer converting a legacy COBOL program to Python 3.11.
 
-COBOL file: {filename}{dep_block}{doc_block}{sys_block}
+COBOL file: {filename}{dep_block}{doc_block}{sys_block}{iface_block}
 
 COBOL SOURCE:{trunc_note}
 {source}
@@ -336,6 +343,12 @@ CONNECTED SYSTEM — PACKAGE STRUCTURE
   that calls main().
 - If this is a called subprogram or utility, expose its primary logic as a
   clearly named public function (not wrapped in __main__).
+
+INTER-MODULE CALLS
+- When calling a function in another module, use EXACTLY the signature shown in the
+  KNOWN DEPENDENCY INTERFACES block above. Match parameter names, types, and order precisely.
+- If no interface is shown for a dependency (it is marked "not yet transformed"), add
+  # TODO: verify signature on the call line and use your best inference from the CALL USING clause.
 
 STRUCTURE
 - Produce a single Python module (.py file).
@@ -385,12 +398,14 @@ for the missing portion."""
         doc_ctx: str,
         etl_ops: list[ETLOperation],
         sys_ctx: str,
+        known_interfaces: str,
         was_truncated: bool,
     ) -> str:
-        dep_block = f"\n\nDependency context:\n{dep_ctx}" if dep_ctx else ""
-        doc_block = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
-        sys_block = f"\n\nSYSTEM MAP:\n{sys_ctx}" if sys_ctx else ""
-        trunc_note = (
+        dep_block   = f"\n\nDependency context:\n{dep_ctx}" if dep_ctx else ""
+        doc_block   = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
+        sys_block   = f"\n\nSYSTEM MAP:\n{sys_ctx}" if sys_ctx else ""
+        iface_block = f"\n\n{known_interfaces}" if known_interfaces else ""
+        trunc_note  = (
             "\n\n# NOTE: The COBOL source was truncated for the LLM call."
             if was_truncated else ""
         )
@@ -415,7 +430,7 @@ for the missing portion."""
 
         prompt = f"""You are a senior developer converting a legacy COBOL program to Python 3.11.
 
-COBOL file: {filename}{dep_block}{doc_block}{sys_block}
+COBOL file: {filename}{dep_block}{doc_block}{sys_block}{iface_block}
 
 Database READ operations detected (each becomes a file read from ETL-provided input):
 {read_block}
@@ -480,6 +495,12 @@ Immediately below the module docstring, add this comment block — fill in every
 CONNECTED SYSTEM — PACKAGE STRUCTURE
 - Same relative import rules as the DB version. Use from . import <module_name>
   for any COBOL CALL or COPY dependency.
+
+INTER-MODULE CALLS
+- When calling a function in another module, use EXACTLY the signature shown in the
+  KNOWN DEPENDENCY INTERFACES block above. Match parameter names, types, and order precisely.
+- If no interface is shown for a dependency (it is marked "not yet transformed"), add
+  # TODO: verify signature on the call line and use your best inference from the CALL USING clause.
 
 STRUCTURE AND BUSINESS LOGIC
 - Identical structure to the DB version (docstring, snake_case, type hints, functions).

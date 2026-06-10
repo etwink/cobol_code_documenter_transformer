@@ -13,6 +13,8 @@ The output contains:
 
 from __future__ import annotations
 
+import ast
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -134,23 +136,30 @@ class TransformationPipeline:
         )
 
         # ── 4. Build dependency context and system map ───────────────────────
-        dep_context = _build_dep_context(scanned.cobol)
-        system_map  = _build_system_map(scanned.cobol)
+        analyses    = [parse_file(p) for p in scanned.cobol]
+        graph       = build_dependency_graph(analyses)
+        dep_context = _dep_context_from_graph(graph)
+        system_map  = _system_map_from_graph(scanned.cobol, graph)
 
         # ── 5. Aggregate documentation context from cluster summaries ────────
         doc_context = "\n\n".join(cs.summary for cs in cluster_summaries)
 
-        # ── 6. Transform each COBOL file ─────────────────────────────────────
+        # ── 6. Transform each COBOL file (topological order: callees before callers) ──
         transformations: list[PythonTransformationResult] = []
-        total_cobol = len(scanned.cobol)
-        for idx, cobol_path in enumerate(scanned.cobol):
+        sorted_cobol = _topological_sort(scanned.cobol, graph)
+        known_interfaces: dict[str, str] = {}  # stem.upper() -> extracted Python interface text
+
+        total_cobol = len(sorted_cobol)
+        for idx, cobol_path in enumerate(sorted_cobol):
             _progress(f"Transforming {cobol_path.name}", idx + 1, total_cobol)
+            dep_interfaces = _get_dep_interfaces(cobol_path.stem.upper(), graph, known_interfaces)
             try:
                 result = self.transformer.transform(
                     cobol_path,
                     dependency_context=dep_context,
                     documentation_context=doc_context[:4_000],
                     system_context=system_map,
+                    known_interfaces=dep_interfaces,
                 )
             except Exception as exc:
                 error_msg = (
@@ -165,6 +174,7 @@ class TransformationPipeline:
                     transformation_notes=f"FAILED — {type(exc).__name__}: {exc}",
                 )
                 _progress(f"  ERROR transforming {cobol_path.name}: {exc}", idx + 1, total_cobol)
+            known_interfaces[cobol_path.stem.upper()] = _extract_python_interface(result.python_db_code)
             transformations.append(result)
 
         # ── 7. Aggregate ETL operations ──────────────────────────────────────
@@ -614,11 +624,7 @@ class _DocumentationBuilder:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_dep_context(cobol_files: list[Path]) -> str:
-    if not cobol_files:
-        return ""
-    analyses = [parse_file(p) for p in cobol_files]
-    graph = build_dependency_graph(analyses)
+def _dep_context_from_graph(graph: dict) -> str:
     lines = []
     for src, deps in sorted(graph.items()):
         for dep in deps:
@@ -626,7 +632,7 @@ def _build_dep_context(cobol_files: list[Path]) -> str:
     return "\n".join(lines)
 
 
-def _build_system_map(cobol_files: list[Path]) -> str:
+def _system_map_from_graph(cobol_files: list[Path], graph: dict) -> str:
     """
     Build a human-readable map of the whole system for the LLM.
 
@@ -637,9 +643,6 @@ def _build_system_map(cobol_files: list[Path]) -> str:
     """
     if not cobol_files:
         return ""
-
-    analyses = [parse_file(p) for p in cobol_files]
-    graph = build_dependency_graph(analyses)
 
     # Build reverse map: who calls each program
     callers: dict[str, list[str]] = {}
@@ -680,3 +683,134 @@ def _clusters_block(cluster_texts: list[str]) -> str:
     return "\n\n".join(
         f"--- Cluster {i+1} ---\n{t}" for i, t in enumerate(cluster_texts)
     )
+
+
+def _topological_sort(cobol_files: list[Path], graph: dict) -> list[Path]:
+    """Return files in leaf-first (callees before callers) order using Kahn's algorithm.
+
+    Processing callees first means each module's public interface is extracted before
+    callers are transformed, so callers receive exact function signatures.
+    Isolated files (no dependencies in either direction) go first.
+    Cycles are broken by appending remaining nodes in original order.
+    """
+    stem_to_path = {p.stem.upper(): p for p in cobol_files}
+    all_stems = set(stem_to_path)
+
+    # Build reversed graph: callee -> [callers] and in-degree in the reversed graph.
+    # In the reversed graph, in-degree[A] = number of things A calls in the original graph.
+    # Nodes with in-degree 0 in the reversed graph = pure leaves (call nobody) → process first.
+    in_degree: dict[str, int] = {s: 0 for s in all_stems}
+    reversed_adj: dict[str, list[str]] = {s: [] for s in all_stems}
+
+    for src, deps in graph.items():
+        if src not in all_stems:
+            continue
+        for dep in deps:
+            tgt = dep["target"]
+            if tgt not in all_stems:
+                continue
+            reversed_adj[tgt].append(src)
+            in_degree[src] += 1
+
+    queue = deque(s for s, deg in in_degree.items() if deg == 0)
+    sorted_stems: list[str] = []
+
+    while queue:
+        node = queue.popleft()
+        sorted_stems.append(node)
+        for neighbor in reversed_adj[node]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    # Append any remaining nodes (cycles) in original file order
+    covered = set(sorted_stems)
+    for p in cobol_files:
+        if p.stem.upper() not in covered:
+            sorted_stems.append(p.stem.upper())
+
+    return [stem_to_path[s] for s in sorted_stems if s in stem_to_path]
+
+
+def _extract_python_interface(python_code: str) -> str:
+    """Parse generated Python with ast and return all public function signatures.
+
+    Returns a formatted block suitable for injection into LLM prompts.
+    Returns an empty string if the code cannot be parsed (e.g. LLM error output).
+    """
+    try:
+        tree = ast.parse(python_code)
+    except SyntaxError:
+        return ""
+
+    lines: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if node.name.startswith("_"):
+            continue
+
+        func_args = node.args
+        args: list[str] = []
+
+        n_defaults = len(func_args.defaults)
+        n_pos = len(func_args.args) - n_defaults
+        for i, arg in enumerate(func_args.args):
+            ann = f": {ast.unparse(arg.annotation)}" if arg.annotation else ""
+            if i >= n_pos:
+                default = f" = {ast.unparse(func_args.defaults[i - n_pos])}"
+                args.append(f"{arg.arg}{ann}{default}")
+            else:
+                args.append(f"{arg.arg}{ann}")
+
+        if func_args.vararg:
+            ann = f": {ast.unparse(func_args.vararg.annotation)}" if func_args.vararg.annotation else ""
+            args.append(f"*{func_args.vararg.arg}{ann}")
+        if func_args.kwarg:
+            ann = f": {ast.unparse(func_args.kwarg.annotation)}" if func_args.kwarg.annotation else ""
+            args.append(f"**{func_args.kwarg.arg}{ann}")
+
+        ret = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+        sig = f"  def {node.name}({', '.join(args)}){ret}: ..."
+
+        docstring = ast.get_docstring(node)
+        if docstring:
+            first_line = docstring.split("\n")[0][:100]
+            lines.append(f"{sig}  # {first_line}")
+        else:
+            lines.append(sig)
+
+    return "\n".join(lines)
+
+
+def _get_dep_interfaces(
+    stem: str,
+    graph: dict,
+    known_interfaces: dict[str, str],
+) -> str:
+    """Return a formatted context block of known interfaces for a file's direct dependencies.
+
+    Only CALL-type edges are included (COPY dependencies are shared data structures,
+    not callable functions).  When a dependency has not yet been transformed, a
+    placeholder is emitted so the LLM knows to add a # TODO comment.
+    """
+    deps = [d for d in graph.get(stem, []) if d.get("dep_type") == "CALL"]
+    if not deps:
+        return ""
+
+    lines = [
+        "KNOWN DEPENDENCY INTERFACES — use EXACTLY these signatures when calling other modules.",
+        "Do not invent different parameter names, counts, or types.",
+    ]
+    for dep in deps:
+        tgt = dep["target"]
+        iface = known_interfaces.get(tgt, "")
+        lines.append(f"\n  {tgt.lower()}.py:")
+        if iface:
+            lines.append(iface)
+        else:
+            lines.append(
+                f"    # (not yet transformed — add '# TODO: verify signature' on every call)"
+            )
+
+    return "\n".join(lines)

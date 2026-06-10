@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-10 · `pending`
+
+### Added — Leaf-first transformation order + interface injection for accurate cross-module calls
+- `transformation_pipeline.py`: COBOL files are now transformed in callee-first topological order using Kahn's algorithm on the reversed dependency graph — ensures each module's Python interface is extracted before any caller that depends on it is transformed
+- `transformation_pipeline.py`: `_extract_python_interface()` uses `ast.parse()` to pull all public function signatures from a freshly generated Python module and formats them as a prompt-ready block
+- `transformation_pipeline.py`: `_get_dep_interfaces()` assembles a `KNOWN DEPENDENCY INTERFACES` context block for each file, covering only direct `CALL`-type edges; emits a `# (not yet transformed)` placeholder when a dependency hasn't been processed yet
+- `transformation_pipeline.py`: `_topological_sort()` — Kahn's on reversed graph; falls back to original file order for any cycles
+- `transformation_pipeline.py`: dependency graph is now parsed **once** (previously re-parsed independently inside both `_build_dep_context` and `_build_system_map`); helpers renamed to `_dep_context_from_graph` / `_system_map_from_graph` and take a pre-built graph
+
+### Changed — Transformer prompts enforce exact inter-module call signatures
+- `cobol_transformer.py`: `transform()`, `_generate_db_version()`, `_generate_etl_version()`, and `_transform_chunked()` now accept a `known_interfaces: str` parameter
+- `cobol_transformer.py`: both DB and ETL LLM prompts include the interface block and an explicit `INTER-MODULE CALLS` rule: use the exact signatures shown; add `# TODO: verify signature` when none is available for a dependency
+
+### Removed
+- `cobol_transformer.py`: unused `etl_operations_summary` import
+
+---
+
 ## [Unreleased] — 2026-06-09 · `8645712`
 
 ### Fixed — Duplicate ETL entries for same cursor/file
