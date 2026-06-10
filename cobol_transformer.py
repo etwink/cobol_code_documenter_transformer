@@ -500,10 +500,22 @@ Immediately below the module docstring, add this comment block — fill in every
     # ─────────────────────────────────────────────────────────────────────────
 
 CONNECTED SYSTEM — PACKAGE STRUCTURE
-- Same relative import rules as the DB version. Use from . import <module_name>
-  for any COBOL CALL or COPY dependency.
-- For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN), treat like COPY:
-  from . import <member_lower>
+- All COBOL programs in this scan are part of ONE system. The generated Python files
+  are modules in the same package. Treat them as such.
+- For every COBOL CALL statement, use a relative import: from . import <module_name>
+  and call the appropriate function in that module. Do NOT duplicate logic.
+- For COBOL COPY statements (copybooks), ALWAYS import the corresponding Python module:
+  from . import <copybook_module>
+  Do NOT redefine locally any data structures, constants, or field names that are
+  declared in the copybook. In the ETL version, use the copybook's field names as
+  the pipe-delimited column headers in the relevant etl_in_*.txt / etl_out_*.txt files.
+- For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN table declarations), treat exactly
+  like a COPY: from . import <member_lower>  — the member defines the table schema;
+  use its field names as the pipe-delimited column headers in the ETL files.
+- If this program is the system entry point, add an if __name__ == "__main__": block
+  that calls main().
+- If this is a called subprogram or utility, expose its primary logic as a
+  clearly named public function (not wrapped in __main__).
 
 INTER-MODULE CALLS
 - When calling a function in another module, use EXACTLY the signature shown in the

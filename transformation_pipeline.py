@@ -843,7 +843,9 @@ def _get_dep_interfaces(
             lines.append(iface)
         else:
             lines.append(
-                "    # (no public functions detected — import data structures / constants as needed)"
+                "    # (no public functions — MUST still import this module for its data structures,"
+                " record layouts, or constants. Do not redefine them locally."
+                " In the ETL version, use its field names as pipe-delimited column headers.)"
             )
 
     return "\n".join(lines)

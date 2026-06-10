@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-10 · `pending` (JCV/CT1 deps + ETL copybook import fix)
+
+### Fixed — ETL version does not import copybook modules even when system map shows dependency
+- `cobol_transformer.py`: ETL prompt's `CONNECTED SYSTEM` section previously said "same rules as the DB version" — the LLM receives a separate prompt and cannot see the DB version's rules; expanded to fully re-state all import rules with ETL-specific guidance: always emit `from . import <copybook>`, use the copybook's field names as pipe-delimited column headers in ETL input/output files, never redefine structures locally
+- `transformation_pipeline.py` / `_get_dep_interfaces`: strengthened the "no public functions" message for data-only copybooks from "import as needed" (which the LLM treats as optional) to an explicit "MUST still import" with instructions to use field names as ETL file column headers
+
+### Added — JCL DSN dependency detection for JCV → CT1 references
+- `cobol_dependency_analyzer.py`: added `JCL DSN` pattern matching `DSN=<qualifiers>(<member>)` in JCL DD statements — e.g. `DSN=CMNPPO.PRODSHRP.CT1(CIMPCMS1)` creates a dependency edge from the JCV file to `CIMPCMS1`; dep_type `"JCL DSN"` in the graph
+- `cobol_dependency_analyzer.py`: added `.CT1` and `.JCV` to `TARGET_EXTENSIONS` so these files participate in the dependency graph (`.CT1` COBOL source + `.JCV` JCL are already in `COBOL_EXTENSIONS` in `folder_scanner.py`)
+- `cobol_dependency_analyzer.py` / `_is_comment_line`: fixed JCL comment detection — `stripped.startswith("/")` was returning `True` for all JCL lines including valid `//DDNAME DD DSN=...` statements, causing all DSN matches to be filtered out; now explicitly returns `False` for lines starting with `//` (valid JCL statement) and `True` only for `//*` (JCL comment)
+
+---
+
 ## [Unreleased] — 2026-06-10 · `pending` (dependency graph dedup + copybook detection)
 
 ### Fixed — COPY and CALL statements with developer sequence-number prefix not detected

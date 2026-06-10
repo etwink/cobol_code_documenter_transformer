@@ -68,6 +68,16 @@ DEPENDENCY_PATTERNS: list[tuple[str, re.Pattern]] = [
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
+    # JCL DD statement: DSN=QUALIFIER.QUALIFIER.LIB(MEMBER),DISP=SHR
+    # The member name in parentheses is the dependent COBOL program.
+    # E.g. DSN=CMNPPO.PRODSHRP.CT1(CIMPCMS1) → target = CIMPCMS1
+    (
+        "JCL DSN",
+        re.compile(
+            r"DSN=[\w\$\.]+\((?P<member>[\w\$\-#@]+)\)",
+            re.IGNORECASE,
+        ),
+    ),
     # EXEC CICS LINK PROGRAM(<name>)   — common in CIC files
     (
         "EXEC CICS LINK",
@@ -94,7 +104,7 @@ DEPENDENCY_PATTERNS: list[tuple[str, re.Pattern]] = [
     ),
 ]
 
-TARGET_EXTENSIONS = {".CIC", ".CPY", ".MPS", ".SRC"}
+TARGET_EXTENSIONS = {".CIC", ".CPY", ".MPS", ".SRC", ".CT1", ".JCV"}
 
 
 # ---------------------------------------------------------------------------
@@ -128,16 +138,25 @@ def _strip_quotes(value: str) -> str:
 
 def _is_comment_line(line: str) -> bool:
     """
-    In fixed-format COBOL column 7 (index 6) is '*' or '/' for comments.
-    Free-format files won't have sequence numbers, so this heuristic is
-    conservative: only skip if the line is long enough and col 7 matches.
+    Return True if this line is a comment and should be excluded from matching.
+
+    Rules:
+      - JCL (JCV files): comment lines start with //* — regular statements
+        start with // and are NOT comments.
+      - Fixed-format COBOL: column 7 (index 6) is '*' or '/' for comments,
+        or 'D'/'d' for debug lines.
+      - Free-format COBOL: stripped line starts with '*'.
     """
+    # JCL comment: starts with //*, regular JCL statement: starts with //
+    if line.startswith("//*"):
+        return True
+    if line.startswith("//"):
+        return False
+    # Fixed-format COBOL: column 7 indicator
     if len(line) >= 7 and line[6] in ("*", "/", "d", "D"):
         return True
-    # Also skip lines whose *stripped* content starts with * (some editors
-    # omit the sequence area entirely).
-    stripped = line.lstrip()
-    return stripped.startswith("*") or stripped.startswith("/")
+    # Free-format / stripped COBOL comment
+    return line.lstrip().startswith("*")
 
 
 def parse_file(path: Path) -> FileAnalysis:
