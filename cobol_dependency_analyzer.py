@@ -78,6 +78,17 @@ DEPENDENCY_PATTERNS: list[tuple[str, re.Pattern]] = [
             re.IGNORECASE,
         ),
     ),
+    # JCL step execution: //STEPNAME EXEC PGM=PROGNAME
+    # The most direct JCL → program dependency — the step runs a named program.
+    # Only the program name is captured; utility names (IEBGENER, SORT, etc.) will
+    # appear as unresolved external nodes in the graph (no matching source file).
+    (
+        "JCL EXEC PGM",
+        re.compile(
+            r"EXEC\s+PGM=(?P<program>[\w\$\-#@]+)",
+            re.IGNORECASE,
+        ),
+    ),
     # EXEC CICS LINK PROGRAM(<name>)   — common in CIC files
     (
         "EXEC CICS LINK",
@@ -104,7 +115,7 @@ DEPENDENCY_PATTERNS: list[tuple[str, re.Pattern]] = [
     ),
 ]
 
-TARGET_EXTENSIONS = {".CIC", ".CPY", ".MPS", ".SRC", ".CT1", ".JCV"}
+TARGET_EXTENSIONS = {".CIC", ".CPY", ".MPS", ".SRC", ".CT1", ".JCV", ".COB", ".CBL", ".COBOL", ".PRV"}
 
 
 # ---------------------------------------------------------------------------

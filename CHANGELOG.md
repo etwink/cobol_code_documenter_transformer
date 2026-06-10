@@ -5,11 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-06-10 · `pending` (JCV/CT1 deps + ETL copybook import fix)
+## [Unreleased] — 2026-06-10 · `pending` (extended dependency coverage: EXEC PGM + standard COBOL extensions)
 
 ### Fixed — ETL version does not import copybook modules even when system map shows dependency
 - `cobol_transformer.py`: ETL prompt's `CONNECTED SYSTEM` section previously said "same rules as the DB version" — the LLM receives a separate prompt and cannot see the DB version's rules; expanded to fully re-state all import rules with ETL-specific guidance: always emit `from . import <copybook>`, use the copybook's field names as pipe-delimited column headers in ETL input/output files, never redefine structures locally
 - `transformation_pipeline.py` / `_get_dep_interfaces`: strengthened the "no public functions" message for data-only copybooks from "import as needed" (which the LLM treats as optional) to an explicit "MUST still import" with instructions to use field names as ETL file column headers
+
+### Added — Standard COBOL extensions and .PRV now participate in dependency graph
+- `cobol_dependency_analyzer.py`: added `.COB`, `.CBL`, `.COBOL`, `.PRV` to `TARGET_EXTENSIONS` — all are already scanned and transformed by the pipeline but were invisible to the dependency analyzer; `.PRV` files are COBOL-syntax procedure files (IBM batch utility invokers using standard CALL/EXEC patterns, identifiable by the `DESCRIPTIVE-NAME` / `FUNCTION` comment header)
+
+### Added — JCL EXEC PGM= detection
+- `cobol_dependency_analyzer.py`: added `JCL EXEC PGM` pattern matching `EXEC PGM=<program>` in JCL step statements (the most direct JCL → program dependency); utility names like IEBGENER/SORT appear as unresolved external nodes and do not affect resolution of application program edges
 
 ### Added — JCL DSN dependency detection for JCV → CT1 references
 - `cobol_dependency_analyzer.py`: added `JCL DSN` pattern matching `DSN=<qualifiers>(<member>)` in JCL DD statements — e.g. `DSN=CMNPPO.PRODSHRP.CT1(CIMPCMS1)` creates a dependency edge from the JCV file to `CIMPCMS1`; dep_type `"JCL DSN"` in the graph
