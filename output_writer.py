@@ -22,7 +22,7 @@ from pathlib import Path
 
 from transformation_pipeline import TransformationOutput, TransformationDocument
 from cobol_transformer import PythonTransformationResult
-from etl_detector import ETLOperation
+from etl_detector import ETLOperation, OperationType
 
 
 class OutputWriter:
@@ -302,7 +302,6 @@ def _format_etl_file_entry(op: ETLOperation, direction: str) -> str:
 
 def _sql_hint(op: ETLOperation) -> str:
     """Return a formatted SQL/COBOL hint line if the operation has a useful raw statement."""
-    from etl_detector import OperationType
     sql_types = {
         OperationType.SQL_SELECT,
         OperationType.SQL_INSERT,
@@ -311,7 +310,9 @@ def _sql_hint(op: ETLOperation) -> str:
     }
     if op.operation_type not in sql_types:
         return ""
-    stmt = op.raw_statement.strip()
+    # Collapse newlines/extra whitespace — EXEC SQL blocks span multiple COBOL lines and
+    # embedded newlines break inline markdown backtick spans.
+    stmt = " ".join(op.raw_statement.split())
     if not stmt:
         return ""
     return f"- COBOL SQL: `{stmt}`\n"
@@ -510,8 +511,12 @@ def _build_etl_quickstart(
     # Deduplicate by filename — the ETL detector collapses most duplicates
     # already, but this ensures the quickstart is clean even if residual
     # duplicates arrive (e.g. same table accessed by two different modules).
+    # SQL_CURSOR operations (OPEN/FETCH/CLOSE on a cursor name) are excluded here.
+    # The underlying table is already captured as SQL_SELECT from the DECLARE CURSOR
+    # statement, so SQL_CURSOR entries would produce spurious etl_in_<cursor_name>.txt
+    # entries with no useful SQL query to show the ETL engineer.
     read_ops  = _unique_by_filename(
-        [op for op in all_etl_ops if op.is_read],
+        [op for op in all_etl_ops if op.is_read and op.operation_type != OperationType.SQL_CURSOR],
         prefix="etl_in_",
     )
     write_ops = _unique_by_filename(

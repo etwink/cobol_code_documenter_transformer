@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-10 · `pending` (ETL detector + quickstart fixes)
+
+### Fixed — FILE_PATTERNS regex misses lines with developer/change-number prefix
+- `etl_detector.py`: changed all four `_FILE_PATTERNS` from `^\s{0,6}(?!\*)\s*VERB` to `^.{0,6}\s+VERB` — the old pattern required the first 6 characters to be whitespace, so lines like `CPK001           WRITE FILE-NAME` (developer change prefix in the COBOL sequence area) were silently skipped; the new pattern allows any 6 characters then requires at least one whitespace before the verb; comment filtering is unchanged (handled post-match by `_is_comment_line`)
+
+### Fixed — SQL_CURSOR lifecycle ops generate spurious ETL input files with no SQL query
+- `output_writer.py`: `SQL_CURSOR` operations (OPEN/FETCH/CLOSE on a cursor name) are now filtered from quickstart `read_ops`; the underlying table is already represented by the `SQL_SELECT` captured from the `DECLARE CURSOR FOR SELECT` statement — keeping the cursor entry produced a confusing `etl_in_<cursor_name>.txt` entry with no SQL query for the ETL engineer
+- `cobol_transformer.py`: same filter applied to `read_ops` in `_generate_etl_version` so the LLM is not told to read from `etl_in_<cursor_name>.txt` instead of the actual table's input file
+
+### Fixed — Multi-line EXEC SQL statement breaks inline markdown code span in quickstart
+- `output_writer.py`: `_sql_hint()` now normalises `raw_statement` whitespace with `" ".join(stmt.split())` before rendering; EXEC SQL blocks span multiple COBOL lines so `raw_statement` contained embedded newlines that broke inline backtick code spans in the rendered quickstart
+
+### Housekeeping
+- `output_writer.py`: moved `OperationType` import to module level (was an inline import inside `_sql_hint`)
+- `cobol_transformer.py`: added `OperationType` to module-level import
+
+---
+
 ## [Unreleased] — 2026-06-10 · `pending`
 
 ### Added — Leaf-first transformation order + interface injection for accurate cross-module calls

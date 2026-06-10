@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from llm_integration import AzureLLMClient
-from etl_detector import ETLDetector, ETLOperation
+from etl_detector import ETLDetector, ETLOperation, OperationType
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +410,11 @@ for the missing portion."""
             if was_truncated else ""
         )
 
-        read_ops  = [op for op in etl_ops if op.is_read]
+        # SQL_CURSOR (OPEN/FETCH/CLOSE on a cursor name) is excluded — the actual table
+        # is already listed as a SQL_SELECT from the DECLARE CURSOR FOR SELECT statement.
+        # Including cursor names would tell the LLM to read from etl_in_<cursor_name>.txt
+        # instead of the real table's input file.
+        read_ops  = [op for op in etl_ops if op.is_read and op.operation_type != OperationType.SQL_CURSOR]
         write_ops = [op for op in etl_ops if not op.is_read]
 
         read_block = (

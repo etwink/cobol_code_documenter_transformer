@@ -126,33 +126,42 @@ _CICS_PATTERNS: list[tuple[OperationType, re.Pattern]] = [
 ]
 
 # Sequential file I/O — COBOL OPEN/READ/WRITE/CLOSE verbs in the Procedure Division.
-# These patterns are deliberately conservative (no DOTALL) to avoid false positives.
+#
+# Pattern structure: ^.{0,6}\s+VERB
+#   ^.{0,6}  — columns 1-6 (sequence / change-number area); can be spaces OR any
+#              developer prefix such as "CPK001".  Up to 6 characters, any content.
+#   \s+      — column 7 onwards must have at least one whitespace before the verb
+#              (column 7 is the indicator column; code starts at column 8).
+#              The regex engine backtracks so that shorter sequence areas still match.
+#
+# Comment lines (column-7 = * or /) are filtered out post-match by _is_comment_line,
+# so the regex does not need a negative lookahead for them.
 _FILE_PATTERNS: list[tuple[OperationType, re.Pattern]] = [
     (
         OperationType.FILE_OPEN,
         re.compile(
-            r"^\s{0,6}(?!\*)\s*OPEN\s+(?:INPUT|OUTPUT|I-O|EXTEND)\s+(?P<target>[\w-]+)",
+            r"^.{0,6}\s+OPEN\s+(?:INPUT|OUTPUT|I-O|EXTEND)\s+(?P<target>[\w-]+)",
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
     (
         OperationType.FILE_READ,
         re.compile(
-            r"^\s{0,6}(?!\*)\s*READ\s+(?P<target>[\w-]+)(?:\s+(?:INTO|AT\s+END|NEXT|RECORD))?",
+            r"^.{0,6}\s+READ\s+(?P<target>[\w-]+)(?:\s+(?:INTO|AT\s+END|NEXT|RECORD))?",
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
     (
         OperationType.FILE_WRITE,
         re.compile(
-            r"^\s{0,6}(?!\*)\s*WRITE\s+(?P<target>[\w-]+)(?:-RECORD)?(?:\s+(?:FROM|AT|AFTER|BEFORE))?",
+            r"^.{0,6}\s+WRITE\s+(?P<target>[\w-]+)(?:-RECORD)?(?:\s+(?:FROM|AT|AFTER|BEFORE))?",
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
     (
         OperationType.FILE_CLOSE,
         re.compile(
-            r"^\s{0,6}(?!\*)\s*CLOSE\s+(?P<target>[\w-]+)",
+            r"^.{0,6}\s+CLOSE\s+(?P<target>[\w-]+)",
             re.IGNORECASE | re.MULTILINE,
         ),
     ),
