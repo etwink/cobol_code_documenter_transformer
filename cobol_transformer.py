@@ -339,6 +339,9 @@ CONNECTED SYSTEM — PACKAGE STRUCTURE
   and call the appropriate function in that module. Do NOT duplicate logic.
 - For COBOL COPY statements (copybooks), import shared data structures or constants
   from the corresponding Python module: from . import <copybook_module>
+- For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN table declarations), treat exactly
+  like a COPY: from . import <member_lower>  — the member maps to a Python module that
+  defines the table's data structure (dataclass or TypedDict).
 - If this program is the system entry point, add an if __name__ == "__main__": block
   that calls main().
 - If this is a called subprogram or utility, expose its primary logic as a
@@ -499,6 +502,8 @@ Immediately below the module docstring, add this comment block — fill in every
 CONNECTED SYSTEM — PACKAGE STRUCTURE
 - Same relative import rules as the DB version. Use from . import <module_name>
   for any COBOL CALL or COPY dependency.
+- For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN), treat like COPY:
+  from . import <member_lower>
 
 INTER-MODULE CALLS
 - When calling a function in another module, use EXACTLY the signature shown in the

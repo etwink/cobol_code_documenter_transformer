@@ -625,9 +625,16 @@ class _DocumentationBuilder:
 # ---------------------------------------------------------------------------
 
 def _dep_context_from_graph(graph: dict) -> str:
+    # Deduplicate: same COBOL verb (CALL/COPY) can appear on many lines; show each
+    # unique (source, dep_type, target) edge only once.
+    seen: set[tuple] = set()
     lines = []
     for src, deps in sorted(graph.items()):
         for dep in deps:
+            key = (src, dep["dep_type"], dep["target"])
+            if key in seen:
+                continue
+            seen.add(key)
             lines.append(f"{src} --[{dep['dep_type']}]--> {dep['target']}")
     return "\n".join(lines)
 
@@ -788,13 +795,26 @@ def _get_dep_interfaces(
     graph: dict,
     known_interfaces: dict[str, str],
 ) -> str:
-    """Return a formatted context block of known interfaces for a file's direct dependencies.
+    """Return a formatted context block of known interfaces for a file's dependencies.
 
-    Only CALL-type edges are included (COPY dependencies are shared data structures,
-    not callable functions).  When a dependency has not yet been transformed, a
-    placeholder is emitted so the LLM knows to add a # TODO comment.
+    Covers both CALL dependencies (callable subprograms) and COPY dependencies
+    (copybooks — may define data structures, constants, or paragraphs).
+    Each unique target is listed exactly once regardless of how many times the
+    same CALL/COPY appears in the COBOL source.
+
+    The known_interfaces value is:
+      None   — dependency not yet transformed (processed later in topological order)
+      ""     — transformed but no public functions found (data-only copybook)
+      <text> — transformed and has callable public functions
     """
-    deps = [d for d in graph.get(stem, []) if d.get("dep_type") == "CALL"]
+    # Deduplicate by target name; preserve first-occurrence order
+    seen_targets: set[str] = set()
+    deps: list[dict] = []
+    for d in graph.get(stem, []):
+        if d.get("dep_type") in ("CALL", "COPY", "SQL INCLUDE") and d["target"] not in seen_targets:
+            seen_targets.add(d["target"])
+            deps.append(d)
+
     if not deps:
         return ""
 
@@ -804,13 +824,26 @@ def _get_dep_interfaces(
     ]
     for dep in deps:
         tgt = dep["target"]
-        iface = known_interfaces.get(tgt, "")
-        lines.append(f"\n  {tgt.lower()}.py:")
-        if iface:
+        dep_type = dep.get("dep_type", "CALL")
+        if dep_type == "COPY":
+            label = "COPY — shared data structures / constants"
+        elif dep_type == "SQL INCLUDE":
+            label = "SQL INCLUDE — DB2 DCLGEN table declarations"
+        else:
+            label = "CALL"
+        # Use .get with sentinel to distinguish "not in dict yet" from "empty string"
+        iface = known_interfaces.get(tgt, None)
+
+        lines.append(f"\n  {tgt.lower()}.py:  [{label}]")
+        if iface is None:
+            lines.append(
+                "    # (not yet transformed — add '# TODO: verify signature' on every call)"
+            )
+        elif iface:
             lines.append(iface)
         else:
             lines.append(
-                f"    # (not yet transformed — add '# TODO: verify signature' on every call)"
+                "    # (no public functions detected — import data structures / constants as needed)"
             )
 
     return "\n".join(lines)

@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-10 · `pending` (dependency graph dedup + copybook detection)
+
+### Fixed — COPY and CALL statements with developer sequence-number prefix not detected
+- `cobol_dependency_analyzer.py`: COPY and CALL patterns used `^\s{0,6}(?!\*)\s*VERB` — same bug as the ETL detector FILE patterns; lines like `CPK001     COPY MYBOOK` were silently missed because columns 1-6 are not spaces; changed to `^.{0,6}\s+VERB` for the same reason
+- Root cause of copybook modules being generated but never imported by the main file: no COPY edges in the dependency graph meant the system map showed no relationship and the transformer had no signal to emit `from . import <copybook>`
+
+### Fixed — Duplicate edges in dependency context, system map, and interface blocks
+- `transformation_pipeline.py` / `_dep_context_from_graph`: deduplicate by `(source, dep_type, target)` — the same `CALL 'ABEND'` appearing on 4 lines produced 4 identical prompt lines
+- `transformation_pipeline.py` / `_get_dep_interfaces`: deduplicate by target name before building the interface block — same dependency appearing multiple times produced the same `abend.py:` section repeated
+
+### Added — EXEC SQL INCLUDE detection for DB2 DCLGEN copybooks
+- `cobol_dependency_analyzer.py`: new `SQL INCLUDE` pattern matches `EXEC SQL INCLUDE <member> END-EXEC` — DB2's mechanism for including DCLGEN-generated table declarations; functionally identical to COPY and maps to a `.CPY` file with the same stem
+- `transformation_pipeline.py` / `_get_dep_interfaces`: `SQL INCLUDE` dependencies are now included alongside CALL and COPY with label `[SQL INCLUDE — DB2 DCLGEN table declarations]`
+- `cobol_transformer.py`: both DB and ETL prompts now explicitly instruct the LLM to treat `EXEC SQL INCLUDE` the same as COPY (`from . import <member_lower>`)
+
+### Improved — `_get_dep_interfaces` now covers COPY dependencies
+- `transformation_pipeline.py` / `_get_dep_interfaces`: expanded from CALL-only to CALL + COPY so copybook interfaces (data structures, constants, paragraph functions) are injected into the caller's prompt
+- Added label `[COPY — shared data structures / constants]` vs `[CALL]` so the LLM knows the nature of each dependency
+- Improved placeholder messages: distinguishes "not yet transformed" (key absent from dict) from "transformed but data-only" (key present, empty interface — e.g. a pure data copybook with no public functions)
+
+---
+
 ## [Unreleased] — 2026-06-10 · `pending` (ETL detector + quickstart fixes)
 
 ### Fixed — FILE_PATTERNS regex misses lines with developer/change-number prefix
