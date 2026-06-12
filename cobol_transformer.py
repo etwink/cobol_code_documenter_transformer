@@ -320,6 +320,33 @@ class CobolToPythonTransformer:
             if was_truncated else ""
         )
 
+        is_copybook = filename.upper().endswith(".CPY")
+        schema_block = """
+FIELD SCHEMA CONSTANTS (this file is a .CPY copybook — all three constants are REQUIRED)
+This module defines a shared record layout. Immediately after any class definitions,
+include EXACTLY these three module-level constants derived from the COBOL PIC clauses:
+
+  FIELD_NAMES: list[str] = [
+      'field_one', 'field_two', ...   # every field in source-definition order
+  ]
+
+  _FIELD_MAX_LENGTHS: dict[str, int] = {  # maximum character / digit count from PIC
+      'field_one': 10,   # PIC X(10)
+      'field_two': 5,    # PIC 9(5)
+      ...
+  }
+
+  FIELD_DATA_TYPES: dict[str, str] = {    # Python type name derived from PIC clause
+      'field_one':   'str',      # PIC X(n) / PIC A(n)       → str
+      'field_two':   'int',      # PIC 9(n) DISPLAY           → int
+      'field_three': 'Decimal',  # PIC 9(n)V9(m) or COMP-3   → Decimal
+      ...
+  }
+
+These constants are consumed by every dependent module to construct ETL pipe-delimited
+file headers, validate field lengths, and understand the full data layout. They MUST
+reflect the actual PIC clauses — do not guess or omit any field.""" if is_copybook else ""
+
         prompt = f"""You are a senior developer converting a legacy COBOL program to Python 3.11.
 
 COBOL file: {filename}{dep_block}{doc_block}{sys_block}{iface_block}
@@ -362,7 +389,7 @@ STRUCTURE
 - Use snake_case for all identifiers. Map COBOL data-names to readable equivalents
   (e.g. WS-ACCT-NUM → account_number).
 - Add type hints wherever the type is unambiguous from the COBOL context.
-
+{schema_block}
 DATABASE OPERATIONS
 - For EXEC SQL: use sqlalchemy (preferred) or a raw cursor with parameterized queries.
   Never construct SQL by string concatenation.
@@ -412,6 +439,33 @@ for the missing portion."""
             "\n\n# NOTE: The COBOL source was truncated for the LLM call."
             if was_truncated else ""
         )
+
+        is_copybook = filename.upper().endswith(".CPY")
+        schema_block = """
+FIELD SCHEMA CONSTANTS (this file is a .CPY copybook — all three constants are REQUIRED)
+This module defines a shared record layout. Immediately after any class definitions,
+include EXACTLY these three module-level constants derived from the COBOL PIC clauses:
+
+  FIELD_NAMES: list[str] = [
+      'field_one', 'field_two', ...   # every field in source-definition order
+  ]
+
+  _FIELD_MAX_LENGTHS: dict[str, int] = {  # maximum character / digit count from PIC
+      'field_one': 10,   # PIC X(10)
+      'field_two': 5,    # PIC 9(5)
+      ...
+  }
+
+  FIELD_DATA_TYPES: dict[str, str] = {    # Python type name derived from PIC clause
+      'field_one':   'str',      # PIC X(n) / PIC A(n)       → str
+      'field_two':   'int',      # PIC 9(n) DISPLAY           → int
+      'field_three': 'Decimal',  # PIC 9(n)V9(m) or COMP-3   → Decimal
+      ...
+  }
+
+These constants are consumed by every dependent module to construct ETL pipe-delimited
+file headers, validate field lengths, and understand the full data layout. They MUST
+reflect the actual PIC clauses — do not guess or omit any field.""" if is_copybook else ""
 
         # SQL_CURSOR (OPEN/FETCH/CLOSE on a cursor name) is excluded — the actual table
         # is already listed as a SQL_SELECT from the DECLARE CURSOR FOR SELECT statement.
@@ -533,7 +587,7 @@ STRUCTURE
 - Use snake_case for all identifiers. Map COBOL data-names to readable equivalents
   (e.g. WS-ACCT-NUM → account_number).
 - Add type hints wherever the type is unambiguous from the COBOL context.
-
+{schema_block}
 BUSINESS LOGIC
 - Preserve all conditional logic, calculations, loops, and validations exactly as coded.
   Do not simplify or omit any logic.

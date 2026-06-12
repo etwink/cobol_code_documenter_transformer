@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — 2026-06-10 · `pending` (extended dependency coverage: EXEC PGM + standard COBOL extensions)
 
+### Added — Copybook prompts now prescribe FIELD_NAMES, _FIELD_MAX_LENGTHS, FIELD_DATA_TYPES constants
+- `cobol_transformer.py`: both DB and ETL prompts inject a `FIELD SCHEMA CONSTANTS` section when the source file is a `.CPY` copybook, requiring the LLM to emit all three module-level constants derived directly from the COBOL PIC clauses; includes a worked example mapping PIC X(n) → str, PIC 9(n) → int, PIC 9(n)V9(m)/COMP-3 → Decimal; section is omitted for non-copybook files to avoid noisy constants on main programs
+- `transformation_pipeline.py` / `_extract_python_interface`: now reliably extracts these constants because they are always present; `_is_constant_name()` matches any ALL_CAPS name including `_PRIVATE_CAPS` so all three are captured; `FIELD_DATA_TYPES` is new and was not previously generated
+
+### Fixed — Known dependency interfaces omit class definitions and field-metadata constants, leaving callers without type or schema context
+- `transformation_pipeline.py` / `_extract_python_interface`: now extracts module-level ALL_CAPS constants (both public and `_PRIVATE_CAPS`) such as `FIELD_NAMES: List[str]` and `_FIELD_MAX_LENGTHS: Dict[str, int]` — copybook modules emit these for field schema and max-length validation; callers need them to build correct ETL pipe-delimited files and validate data sizes; `_is_constant_name()` helper matches on uppercase base name after stripping leading underscores
+- `transformation_pipeline.py` / `_extract_python_interface`: now extracts top-level public class definitions with annotated fields (TypedDicts, dataclasses, NamedTuples) — when a copybook generates `class ABC(TypedDict): customer_id: str ...` and a function signature reads `record: ABC`, callers previously had no definition of `ABC`; constants are emitted first so the class definition has context, then functions
+- `transformation_pipeline.py` / `_extract_python_interface`: switched from `ast.walk(tree)` to `ast.iter_child_nodes(tree)` (top-level only) — `ast.walk` was descending into class bodies and yielding class methods and inner functions as if they were module-level public functions
+- Known limitation: inline `# field: PIC X(10)` type-hint comments in copybook modules are discarded by `ast.parse` and cannot be recovered; the prompt instructions already encourage the LLM to use type annotations instead of comments for field type information
+
 ### Fixed — ETL version imports copybook modules but does not actively use their data structures
 - `cobol_transformer.py`: ETL COPY/SQL INCLUDE instruction was phrased as "ALWAYS import… Do NOT redefine" — imperative/prohibition framing the LLM interprets as "add the import line and stop"; rewritten to match DB version's "import and actively USE" phrasing with an explicit instruction to instantiate `<copybook>.<RecordType>` and reference `<copybook>.FIELD_NAMES` when parsing etl_in_*.txt rows and writing etl_out_*.txt column headers
 - `cobol_transformer.py`: ETL ERROR HANDLING section previously said "Wrap database calls…" — meaningless for a version with zero DB connections; changed to "Wrap file I/O operations (open, csv.reader, csv.writer)…"

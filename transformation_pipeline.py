@@ -740,9 +740,22 @@ def _topological_sort(cobol_files: list[Path], graph: dict) -> list[Path]:
 
 
 def _extract_python_interface(python_code: str) -> str:
-    """Parse generated Python with ast and return all public function signatures.
+    """Parse generated Python with ast and return the public interface.
 
-    Returns a formatted block suitable for injection into LLM prompts.
+    Extracts, in order:
+      1. Module-level ALL_CAPS constants (e.g. FIELD_NAMES, _FIELD_MAX_LENGTHS) —
+         includes private-prefixed names because copybook modules use them for
+         field metadata that callers need for validation and ETL file schema.
+      2. Top-level public class definitions with annotated fields (TypedDicts,
+         dataclasses, NamedTuples) so callers know every type in function signatures.
+      3. Top-level public function signatures.
+
+    Only top-level nodes are included — class methods and nested functions are
+    implementation details, not part of the callable interface.
+
+    Note: inline comments (e.g. field data-type hints written as # comments rather
+    than type annotations) are discarded by ast.parse and cannot be recovered here.
+
     Returns an empty string if the code cannot be parsed (e.g. LLM error output).
     """
     try:
@@ -750,8 +763,60 @@ def _extract_python_interface(python_code: str) -> str:
     except SyntaxError:
         return ""
 
+    def _is_constant_name(name: str) -> bool:
+        """True when name follows the ALL_CAPS constant convention.
+
+        Matches FIELD_NAMES, _FIELD_MAX_LENGTHS, MAX_SIZE, etc.
+        Rejects field_names, FieldNames, _logger, _session, etc.
+        """
+        base = name.lstrip("_")
+        return bool(base) and base == base.upper() and base.replace("_", "").isalnum()
+
     lines: list[str] = []
-    for node in ast.walk(tree):
+    top_level = list(ast.iter_child_nodes(tree))
+
+    # ── 1. Module-level constants (ALL_CAPS, including _PRIVATE_CAPS) ────────
+    const_lines: list[str] = []
+    for node in top_level:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name = node.target.id
+            if _is_constant_name(name) and node.value is not None:
+                ann = f": {ast.unparse(node.annotation)}"
+                const_lines.append(f"  {name}{ann} = {ast.unparse(node.value)}")
+        elif isinstance(node, ast.Assign):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                name = node.targets[0].id
+                if _is_constant_name(name):
+                    const_lines.append(f"  {name} = {ast.unparse(node.value)}")
+    if const_lines:
+        lines.extend(const_lines)
+        lines.append("")
+
+    # ── 2. Public class definitions ──────────────────────────────────────────
+    for node in top_level:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if node.name.startswith("_"):
+            continue
+
+        for dec in node.decorator_list:
+            lines.append(f"  @{ast.unparse(dec)}")
+
+        bases = [ast.unparse(b) for b in node.bases]
+        base_str = f"({', '.join(bases)})" if bases else ""
+        lines.append(f"  class {node.name}{base_str}:")
+
+        fields = [
+            f"    {item.target.id}: {ast.unparse(item.annotation)}"
+            + (f" = {ast.unparse(item.value)}" if item.value else "")
+            for item in node.body
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+        ]
+        lines.extend(fields if fields else ["    ..."])
+        lines.append("")
+
+    # ── 3. Public top-level functions ─────────────────────────────────────────
+    for node in top_level:
         if not isinstance(node, ast.FunctionDef):
             continue
         if node.name.startswith("_"):
