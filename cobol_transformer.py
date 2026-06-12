@@ -504,14 +504,15 @@ CONNECTED SYSTEM — PACKAGE STRUCTURE
   are modules in the same package. Treat them as such.
 - For every COBOL CALL statement, use a relative import: from . import <module_name>
   and call the appropriate function in that module. Do NOT duplicate logic.
-- For COBOL COPY statements (copybooks), ALWAYS import the corresponding Python module:
-  from . import <copybook_module>
-  Do NOT redefine locally any data structures, constants, or field names that are
-  declared in the copybook. In the ETL version, use the copybook's field names as
-  the pipe-delimited column headers in the relevant etl_in_*.txt / etl_out_*.txt files.
+- For COBOL COPY statements (copybooks), import and actively USE shared data structures
+  or constants from the corresponding Python module: from . import <copybook_module>
+  Instantiate <copybook_module>.<RecordType> or reference <copybook_module>.FIELD_NAMES
+  when parsing rows from etl_in_*.txt and when writing column headers and data rows to
+  etl_out_*.txt — do not redefine those structures inline.
 - For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN table declarations), treat exactly
-  like a COPY: from . import <member_lower>  — the member defines the table schema;
-  use its field names as the pipe-delimited column headers in the ETL files.
+  like a COPY: from . import <member_lower>  — the member maps to a Python module that
+  defines the table's data structure (dataclass or TypedDict); use its field names as
+  the pipe-delimited column headers in the ETL files.
 - If this program is the system entry point, add an if __name__ == "__main__": block
   that calls main().
 - If this is a called subprogram or utility, expose its primary logic as a
@@ -523,14 +524,31 @@ INTER-MODULE CALLS
 - If no interface is shown for a dependency (it is marked "not yet transformed"), add
   # TODO: verify signature on the call line and use your best inference from the CALL USING clause.
 
-STRUCTURE AND BUSINESS LOGIC
-- Identical structure to the DB version (docstring, snake_case, type hints, functions).
-- ALL business logic (calculations, conditions, loops, validations) must be identical.
-  Only the I/O layer changes — a database call becomes a file read or write.
+STRUCTURE
+- Produce a single Python module (.py file).
+- Add a module-level docstring covering: program purpose, key inputs, key outputs,
+  entry point function name, and which other modules it calls or is called by.
+- Mirror the COBOL division structure through classes or clearly named functions:
+  identify/initialise → validate_inputs → process → finalise.
+- Use snake_case for all identifiers. Map COBOL data-names to readable equivalents
+  (e.g. WS-ACCT-NUM → account_number).
+- Add type hints wherever the type is unambiguous from the COBOL context.
+
+BUSINESS LOGIC
+- Preserve all conditional logic, calculations, loops, and validations exactly as coded.
+  Do not simplify or omit any logic.
+- Translate COBOL EVALUATE to Python match/case or if/elif chains.
+- Translate PERFORM … UNTIL / PERFORM … VARYING to while/for loops.
+
+ERROR HANDLING
+- Translate COBOL status codes (FILE STATUS, SQLCODE) to Python exceptions or return codes.
+- Wrap file I/O operations (open, csv.reader, csv.writer) in try/except blocks that
+  re-raise as a descriptive RuntimeError.
 
 OUTPUT
-Output ONLY valid Python code. No markdown fences. No explanatory prose outside
-docstrings and inline comments."""
+Output ONLY valid Python code. No markdown fences. No explanatory prose outside docstrings
+and inline comments. If the source was truncated, add a stub function with a # TODO comment
+for the missing portion."""
 
         return self.llm.query(prompt, max_tokens=64_000)
 

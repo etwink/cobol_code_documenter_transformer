@@ -7,8 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — 2026-06-10 · `pending` (extended dependency coverage: EXEC PGM + standard COBOL extensions)
 
-### Fixed — ETL version does not import copybook modules even when system map shows dependency
-- `cobol_transformer.py`: ETL prompt's `CONNECTED SYSTEM` section previously said "same rules as the DB version" — the LLM receives a separate prompt and cannot see the DB version's rules; expanded to fully re-state all import rules with ETL-specific guidance: always emit `from . import <copybook>`, use the copybook's field names as pipe-delimited column headers in ETL input/output files, never redefine structures locally
+### Fixed — ETL version imports copybook modules but does not actively use their data structures
+- `cobol_transformer.py`: ETL COPY/SQL INCLUDE instruction was phrased as "ALWAYS import… Do NOT redefine" — imperative/prohibition framing the LLM interprets as "add the import line and stop"; rewritten to match DB version's "import and actively USE" phrasing with an explicit instruction to instantiate `<copybook>.<RecordType>` and reference `<copybook>.FIELD_NAMES` when parsing etl_in_*.txt rows and writing etl_out_*.txt column headers
+- `cobol_transformer.py`: ETL ERROR HANDLING section previously said "Wrap database calls…" — meaningless for a version with zero DB connections; changed to "Wrap file I/O operations (open, csv.reader, csv.writer)…"
 - `transformation_pipeline.py` / `_get_dep_interfaces`: strengthened the "no public functions" message for data-only copybooks from "import as needed" (which the LLM treats as optional) to an explicit "MUST still import" with instructions to use field names as ETL file column headers
 
 ### Added — Standard COBOL extensions and .PRV now participate in dependency graph
