@@ -116,15 +116,26 @@ class CobolToPythonTransformer:
         )
 
     def _call_llm(self, fn, *args, label: str = "") -> str:
-        """Call an LLM generation method, returning an error comment on failure."""
+        """Call an LLM generation method; raises RuntimeError with context on failure."""
         try:
             return fn(*args)
         except Exception as exc:
-            return (
-                f"# ERROR generating {label} for this file\n"
-                f"# {type(exc).__name__}: {exc}\n"
-                f"# Check logs/llm_calls.log for the full request/response.\n"
-            )
+            msg = str(exc)
+            if any(kw in msg.lower() for kw in ("content_filter", "content management", "content filter")):
+                raise RuntimeError(
+                    f"Azure content filter blocked the prompt for: {label}\n"
+                    f"Check your context_block for language that triggers Azure's content policy.\n"
+                    f"Common triggers: OS/shell command references, security tool names, "
+                    f"exploit-adjacent phrasing. Rephrase (e.g. 'subprocess calls' instead of "
+                    f"'linux commands') and re-run.\n"
+                    f"Original error: {type(exc).__name__}: {msg}\n"
+                    f"See logs/llm_calls.log for the full prompt."
+                ) from exc
+            raise RuntimeError(
+                f"LLM call failed — {label}\n"
+                f"{type(exc).__name__}: {msg}\n"
+                f"See logs/llm_calls.log for the full request/response."
+            ) from exc
 
     def _call_assumptions(self, *args) -> list[str]:
         """Call the assumptions extractor, returning an empty list on failure."""

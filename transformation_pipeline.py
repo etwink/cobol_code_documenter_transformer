@@ -162,18 +162,10 @@ class TransformationPipeline:
                     known_interfaces=dep_interfaces,
                 )
             except Exception as exc:
-                error_msg = (
-                    f"# ERROR: transformation failed for {cobol_path.name}\n"
-                    f"# {type(exc).__name__}: {exc}\n"
-                    f"# Check logs/llm_calls.log for the full request/response.\n"
-                )
-                result = PythonTransformationResult(
-                    source_file=str(cobol_path),
-                    python_db_code=error_msg,
-                    python_etl_code=error_msg,
-                    transformation_notes=f"FAILED — {type(exc).__name__}: {exc}",
-                )
-                _progress(f"  ERROR transforming {cobol_path.name}: {exc}", idx + 1, total_cobol)
+                raise RuntimeError(
+                    f"Transformation failed for {cobol_path.name} "
+                    f"({idx + 1}/{total_cobol}): {exc}"
+                ) from exc
             known_interfaces[cobol_path.stem.upper()] = _extract_python_interface(result.python_db_code)
             transformations.append(result)
 

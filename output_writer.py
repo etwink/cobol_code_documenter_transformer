@@ -99,12 +99,14 @@ class OutputWriter:
     ) -> tuple[Path, str | None]:
         stem = _safe_stem(result.source_file)
         dest = self.output_dir / subdir / f"{stem}.py"
+        stripped = code.strip() if code else ""
+        if not stripped:
+            return dest, "LLM returned empty output — no file written. Check logs/llm_calls.log."
+        if stripped.startswith("# ERROR"):
+            first_lines = "\n".join(stripped.splitlines()[:4])
+            return dest, f"LLM error in generated code — no file written.\n{first_lines}"
         try:
-            content = code.strip() if code and code.strip() else (
-                f"# WARNING: LLM returned empty output for {result.source_file}\n"
-                f"# Re-run the pipeline or check logs/llm_calls.log for details.\n"
-            )
-            dest.write_text(content, encoding="utf-8", newline="\n")
+            dest.write_text(stripped, encoding="utf-8", newline="\n")
             return dest, None
         except Exception as exc:
             return dest, str(exc)
