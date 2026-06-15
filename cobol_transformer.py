@@ -390,6 +390,36 @@ STRUCTURE
   (e.g. WS-ACCT-NUM → account_number).
 - Add type hints wherever the type is unambiguous from the COBOL context.
 {schema_block}
+FILE I/O ASSUMPTIONS
+File reading is a process-level concern, not ETL-specific. Any file this program
+reads (third-party CSV, control file, feed file) must be treated as potentially
+too large to fit in memory, regardless of the operation that follows.
+If the business documentation context above says otherwise, follow that instead.
+
+STREAMING READS — always iterate row by row, never load the whole file:
+    with open('input.csv', encoding='utf-8', newline='') as f:
+        reader = csv.DictReader(f, delimiter='|')
+        for row in reader:   # one row at a time — never list(reader) or readlines()
+            ...
+
+BATCH COMMITS — releasing locks for INSERT / UPDATE operations:
+- Do not wrap an entire file load in a single transaction. Other processes may
+  depend on the table and will be blocked until you commit.
+- Commit every 500 rows (adjust if the business documentation specifies a limit):
+    BATCH_SIZE = 500
+    batch = []
+    for row in reader:
+        batch.append(build_record(row))
+        if len(batch) >= BATCH_SIZE:
+            session.bulk_insert_mappings(MyTable, batch)
+            session.commit()   # releases row/page locks — target: under 60–120 s per batch
+            batch.clear()
+    if batch:
+        session.bulk_insert_mappings(MyTable, batch)
+        session.commit()
+- For full LOAD / REPLACE operations (truncate-then-reload) a single transaction
+  is acceptable, but still process and insert in chunks to control memory.
+
 DATABASE OPERATIONS
 - For EXEC SQL: use sqlalchemy (preferred) or a raw cursor with parameterized queries.
   Never construct SQL by string concatenation.
@@ -528,8 +558,15 @@ ETL INPUT FILES (data provided BY the ETL environment BEFORE this module runs):
 ETL OUTPUT FILES (data produced BY this module FOR the ETL environment AFTER it runs):
 - For every database INSERT / UPDATE / DELETE, write a pipe-delimited output file
   named etl_out_<TABLE_NAME>.txt.
-- Collect all rows in a list of dicts during processing, then write the file in one
-  pass at the end using the csv module with delimiter="|".
+- Stream output rows one at a time — open the file before the processing loop,
+  write the header row immediately, then write each row inside the loop as it is
+  produced. Do NOT accumulate rows in a list first.
+  Example pattern:
+      with open('etl_out_<TABLE>.txt', 'w', encoding='utf-8', newline='') as f:
+          writer = csv.DictWriter(f, fieldnames=FIELD_NAMES, delimiter='|')
+          writer.writeheader()
+          for ...:
+              writer.writerow(row)
 - Mark each output file write with:
     # ETL_OUTPUT: <filename> — consumed by ETL job "<job description>"
 
@@ -552,6 +589,46 @@ Immediately below the module docstring, add this comment block — fill in every
     #               INSERT/UPDATE/DELETE <table> using the following column mapping:
     #               file_col → table_col, ...
     # ─────────────────────────────────────────────────────────────────────────
+
+ETL FILE PROCESSING ASSUMPTIONS
+These are system-level defaults. If the business documentation context at the top
+of this prompt explicitly contradicts any assumption below, the business context
+takes precedence — always follow what the user has specified over these defaults.
+
+1. FILES ARE LARGER THAN AVAILABLE MEMORY
+   Read input files row by row using csv.DictReader as an iterator — never call
+   list(reader), readlines(), or read() on an ETL file:
+       with open('etl_in_<TABLE>.txt', encoding='utf-8', newline='') as f:
+           reader = csv.DictReader(f, delimiter='|')
+           for row in reader:   # one dict per row — no full-file load
+               ...
+   Write output files row by row as shown in ETL OUTPUT FILES above.
+   Use running accumulators for totals/counts instead of collecting rows:
+       total = Decimal('0'); record_count = 0
+       for row in reader:
+           total += Decimal(row['AMOUNT'].strip() or '0')
+           record_count += 1
+
+2. INPUT FILES ARE UNSORTED
+   Do not assume records arrive in any particular order unless the business
+   documentation context explicitly states otherwise (e.g. "file is sorted by
+   POLICY_KEY ascending"). If sorted order is required by the logic but not
+   guaranteed, document it as a precondition in the ETL CONTRACT comment block:
+       # Input job must ORDER BY <column> before writing etl_in_<TABLE>.txt
+
+3. FIELDS MAY BE EMPTY OR PADDED
+   Any field can arrive as an empty string or with surrounding whitespace.
+   Strip before using and guard before type-casting:
+       raw = row['AMOUNT'].strip()
+       amount = Decimal(raw) if raw else Decimal('0')
+
+4. FILE OPEN PARAMETERS
+   Always open ETL files with encoding='utf-8' and newline='':
+       open('etl_in_<TABLE>.txt', encoding='utf-8', newline='')
+   The newline='' argument tells Python NOT to do its own line-ending conversion
+   before the csv module reads the data — without it, Windows-style \\r\\n endings
+   can cause rows to be misread. The csv module handles line endings itself.
+   Override encoding only if the business documentation context specifies otherwise.
 
 CONNECTED SYSTEM — PACKAGE STRUCTURE
 - All COBOL programs in this scan are part of ONE system. The generated Python files

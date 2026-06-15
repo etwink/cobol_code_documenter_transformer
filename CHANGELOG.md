@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-15 · `pending` (ETL streaming + guardrail assumptions)
+
+### Improved — Both DB and ETL prompts enforce streaming file I/O; DB version adds batch-commit guidance
+- `cobol_transformer.py` / ETL prompt: replaced "collect all rows in a list then write in one pass" with streaming row-by-row output writes — open file before loop, write header immediately, write each row inside the loop; accumulating rows in a list exhausts memory for large files
+- `cobol_transformer.py` / ETL prompt: added `ETL FILE PROCESSING ASSUMPTIONS` section with four system-level defaults; user override explicit: "if the business documentation context explicitly contradicts any assumption, the business context takes precedence": (1) files too large for memory — stream row-by-row, use running accumulators not list comprehensions; (2) input unsorted by default — sort requirements become ETL CONTRACT preconditions; (3) fields may be empty/padded — strip and guard before type-casting; (4) open with `newline=''` so Python does not normalize `\r\n` before the csv module reads it
+- `cobol_transformer.py` / DB prompt: added `FILE I/O ASSUMPTIONS` section — file reading is process-level not ETL-specific; any feed/control/CSV file must be streamed row-by-row regardless of version; for INSERT/UPDATE, commit every 500 rows to release row/page locks (target under 60–120 s per batch) so dependent processes are not blocked; for full LOAD/REPLACE a single transaction is acceptable but data must still be inserted in chunks to control memory
+
+---
+
 ## [Unreleased] — 2026-06-15 · `pending` (ETL quickstart SQL missing for cursor-declared queries)
 
 ### Fixed — DECLARE CURSOR FOR SELECT not detected when cursor name contains a hyphen
