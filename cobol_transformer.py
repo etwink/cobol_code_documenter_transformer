@@ -322,7 +322,7 @@ class CobolToPythonTransformer:
         known_interfaces: str,
         was_truncated: bool,
     ) -> str:
-        ctx_block   = f"\n\nUSER CONTEXT — these instructions override all system defaults below:\n{self.context_block}" if self.context_block else ""
+        ctx_block   = f"\n\nPROJECT ENVIRONMENT:\n{self.context_block}" if self.context_block else ""
         dep_block   = f"\n\nDependency context (which programs this one CALLs or COPYs):\n{dep_ctx}" if dep_ctx else ""
         doc_block   = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
         sys_block   = f"\n\nSYSTEM MAP — all programs in this system and their Python module names:\n{sys_ctx}" if sys_ctx else ""
@@ -474,7 +474,7 @@ for the missing portion."""
         known_interfaces: str,
         was_truncated: bool,
     ) -> str:
-        ctx_block   = f"\n\nUSER CONTEXT — these instructions override all system defaults below:\n{self.context_block}" if self.context_block else ""
+        ctx_block   = f"\n\nPROJECT ENVIRONMENT:\n{self.context_block}" if self.context_block else ""
         dep_block   = f"\n\nDependency context:\n{dep_ctx}" if dep_ctx else ""
         doc_block   = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
         sys_block   = f"\n\nSYSTEM MAP:\n{sys_ctx}" if sys_ctx else ""
