@@ -46,12 +46,32 @@ class HierarchicalSummarizer:
         """
         Summarize all clusters. progress_callback(cluster_name, index, total)
         is called before each cluster if provided.
+        Raises RuntimeError with the cluster name and a content-filter hint if an LLM call fails.
         """
         summaries: list[ClusterSummary] = []
         for i, cluster in enumerate(clusters):
             if progress_callback:
                 progress_callback(cluster.cluster_name, i + 1, len(clusters))
-            summaries.append(self._summarize_cluster(cluster, context_block))
+            try:
+                summaries.append(self._summarize_cluster(cluster, context_block))
+            except Exception as exc:
+                msg = str(exc)
+                label = f"cluster '{cluster.cluster_name}' ({i + 1}/{len(clusters)})"
+                if any(kw in msg.lower() for kw in ("content_filter", "content management", "content filter")):
+                    raise RuntimeError(
+                        f"Azure content filter blocked summarization of {label}.\n"
+                        f"Check your context_block for language that triggers Azure's content policy.\n"
+                        f"Common triggers: instruction-style phrasing ('you must', 'always', 'ignore', "
+                        f"'override', 'bypass'), OS/shell references, permission-granting language.\n"
+                        f"Reframe as context, not instructions:\n"
+                        f"  Instead of: 'you should pick up files from X'\n"
+                        f"  Write:      'input files are located at X'\n"
+                        f"Original error: {type(exc).__name__}: {msg}\n"
+                        f"See logs/llm_calls.log for the full prompt."
+                    ) from exc
+                raise RuntimeError(
+                    f"Summarization failed for {label}: {exc}"
+                ) from exc
         return summaries
 
     # ------------------------------------------------------------------
