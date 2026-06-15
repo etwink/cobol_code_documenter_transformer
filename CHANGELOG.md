@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-15 · `pending` (ETL quickstart SQL missing for cursor-declared queries)
+
+### Fixed — DECLARE CURSOR FOR SELECT not detected when cursor name contains a hyphen
+- `etl_detector.py` / SQL_SELECT pattern: the optional DECLARE clause used `\w+` for the cursor name, which cannot match hyphens; COBOL cursor names are commonly hyphenated (e.g. `CIMB8050-CUR`); when `\w+` failed, the optional group silently dropped out and the regex then expected `SELECT` immediately after `EXEC SQL`, found `DECLARE` instead, and produced no match — the entire `DECLARE XYZ CURSOR FOR SELECT ... FROM TABLE END-EXEC` was undetected, so no SQL_SELECT operation was recorded and the ETL quickstart showed nothing for that input
+- Changed `\w+` to `[\w-]+` to allow hyphens in cursor names; extended the match to `END-EXEC` so `raw_statement` captures the full SQL statement (including `WHERE`/`ORDER BY` clauses) instead of stopping at the table name — the ETL engineer needs the WHERE clause to know what data to extract
+
+---
+
 ## [Unreleased] — 2026-06-10 · `pending` (extended dependency coverage: EXEC PGM + standard COBOL extensions)
 
 ### Added — Copybook prompts now prescribe FIELD_NAMES, _FIELD_MAX_LENGTHS, FIELD_DATA_TYPES constants

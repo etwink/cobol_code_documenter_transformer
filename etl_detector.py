@@ -59,8 +59,16 @@ _SQL_PATTERNS: list[tuple[OperationType, re.Pattern]] = [
     (
         OperationType.SQL_SELECT,
         re.compile(
-            r"EXEC\s+SQL\s+(?:DECLARE\s+\w+\s+CURSOR\s+FOR\s+)?SELECT\b.*?"
-            r"FROM\s+(?P<target>[\w.$#@-]+)",
+            # [\w-]+ instead of \w+ — COBOL cursor names are commonly hyphenated
+            # (e.g. CIMB8050-CUR).  \w+ would fail at the hyphen, causing the
+            # optional DECLARE group to silently drop out; the regex then expects
+            # SELECT immediately after EXEC SQL, finds DECLARE instead, and produces
+            # no match — so no SQL_SELECT is recorded and the quickstart shows nothing.
+            # Extending the match to END-EXEC captures the full statement (including
+            # WHERE/ORDER BY) in raw_statement rather than stopping at the table name.
+            r"EXEC\s+SQL\s+(?:DECLARE\s+[\w-]+\s+CURSOR\s+FOR\s+)?SELECT\b.*?"
+            r"FROM\s+(?P<target>[\w.$#@-]+)"
+            r".*?END-EXEC",
             re.IGNORECASE | re.DOTALL,
         ),
     ),
