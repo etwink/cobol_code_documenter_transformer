@@ -70,7 +70,7 @@ class TransformationPipeline:
         """
         self.context_block = context_block
         self.llm = AzureLLMClient()
-        self.transformer = CobolToPythonTransformer()
+        self.transformer = CobolToPythonTransformer(context_block=context_block)
 
     def run(
         self,
