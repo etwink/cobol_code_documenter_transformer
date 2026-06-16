@@ -490,9 +490,11 @@ python python_db/{entry}.py
 
 {module_list}
 
-All modules are part of one Python package. They call each other via relative imports
-(`from . import <module>`). Do not run utility/subprogram modules directly — run the
-entry point above, which orchestrates the full flow.
+All modules live in the same directory and import each other directly by module name.
+Each module inserts its own directory into `sys.path` at the top of the file, so imports
+work whether you run it via `python -m` or directly, and regardless of your current
+working directory. Do not run utility/subprogram modules directly — run the entry point
+above, which orchestrates the full flow.
 
 ## Navigating the Code
 

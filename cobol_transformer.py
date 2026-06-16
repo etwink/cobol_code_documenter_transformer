@@ -31,6 +31,32 @@ class PythonTransformationResult:
     transformation_notes: str = ""
 
 
+_COPYBOOK_SCHEMA_BLOCK = """FIELD SCHEMA CONSTANTS (this file is a .CPY copybook — all three constants are REQUIRED)
+This module defines a shared record layout. Immediately after any class definitions,
+include EXACTLY these three module-level constants derived from the COBOL PIC clauses:
+
+  FIELD_NAMES: list[str] = [
+      'field_one', 'field_two', ...   # every field in source-definition order
+  ]
+
+  _FIELD_MAX_LENGTHS: dict[str, int] = {  # maximum character / digit count from PIC
+      'field_one': 10,   # PIC X(10)
+      'field_two': 5,    # PIC 9(5)
+      ...
+  }
+
+  FIELD_DATA_TYPES: dict[str, str] = {    # Python type name derived from PIC clause
+      'field_one':   'str',      # PIC X(n) / PIC A(n)       → str
+      'field_two':   'int',      # PIC 9(n) DISPLAY           → int
+      'field_three': 'Decimal',  # PIC 9(n)V9(m) or COMP-3   → Decimal
+      ...
+  }
+
+These constants are consumed by every dependent module to construct ETL pipe-delimited
+file headers, validate field lengths, and understand the full data layout. They MUST
+reflect the actual PIC clauses — do not guess or omit any field."""
+
+
 # ---------------------------------------------------------------------------
 # Transformer
 # ---------------------------------------------------------------------------
@@ -50,6 +76,267 @@ class CobolToPythonTransformer:
     _CHUNK_THRESHOLD = 150_000    # chars — above this, use chunked path
     _CHUNK_SIZE      =  80_000    # target chars per chunk (PROCEDURE section only)
     _CHUNK_OVERLAP   =   3_000    # chars of overlap carried into the next chunk
+
+    _DB_SYSTEM_PROMPT = """You are a senior developer converting legacy COBOL programs to idiomatic Python 3.11.
+You will be given one COBOL source file plus system context per request. Produce the
+DATABASE VERSION: all database and file operations are kept as real database calls.
+
+CONNECTED SYSTEM — PACKAGE STRUCTURE
+- All COBOL programs in this scan are part of one system. The generated Python files are
+  modules that live in the same directory. Treat them as such.
+- IMPORTS MUST WORK WHETHER THIS FILE IS RUN DIRECTLY (python module_name.py) OR AS A
+  PACKAGE (python -m package.module). A relative import (from . import x) fails with
+  "attempted relative import with no known parent package" when the file is run directly.
+  Avoid that failure mode:
+    1. At the very top of the file, before any local imports, add:
+         import sys
+         from pathlib import Path
+         sys.path.insert(0, str(Path(__file__).resolve().parent))
+    2. Import sibling modules with a PLAIN import — never a relative import:
+         import <module_name>          # NOT: from . import <module_name>
+       Call its functions as <module_name>.<function_name>(...), or use
+       from <module_name> import <function_name> after the sys.path insert.
+- For every COBOL CALL statement, call the appropriate function in the imported module.
+  Do NOT duplicate logic.
+- For COBOL COPY statements (copybooks) and EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN
+  declarations), import the corresponding module for its shared data structures or constants.
+- If this program is the system entry point, add an if __name__ == "__main__": block that
+  calls main().
+- If this is a called subprogram or utility, expose its primary logic as a clearly named
+  public function (not wrapped in __main__).
+
+INTER-MODULE CALLS
+- When calling a function in another module, use EXACTLY the signature shown in the KNOWN
+  DEPENDENCY INTERFACES block, when one is provided. Match parameter names, types, and order.
+- If no interface is shown for a dependency (marked "not yet transformed"), add
+  # TODO: verify signature on the call line and infer from the CALL USING clause.
+
+STRUCTURE
+- Produce a single Python module (.py file).
+- Add a module-level docstring covering: program purpose, key inputs, key outputs, entry
+  point function name, and which other modules it calls or is called by.
+- Mirror the COBOL division structure through classes or clearly named functions:
+  identify/initialise → validate_inputs → process → finalise.
+- Use snake_case for all identifiers. Map COBOL data-names to readable equivalents
+  (e.g. WS-ACCT-NUM → account_number).
+- Add type hints wherever the type is unambiguous from the COBOL context.
+
+FILE I/O ASSUMPTIONS
+File reading is a process-level concern, not tied to any one operation. Any file this
+program reads (third-party CSV, control file, feed file) must be treated as potentially
+too large to fit in memory. If the PROJECT CONTEXT below says otherwise, follow that instead.
+
+STREAMING READS — always iterate row by row, never load the whole file:
+    with open('input.csv', encoding='utf-8', newline='') as f:
+        reader = csv.DictReader(f, delimiter='|')
+        for row in reader:   # one row at a time — never list(reader) or readlines()
+            ...
+
+BATCH COMMITS — releasing locks for INSERT / UPDATE operations:
+- Do not wrap an entire file load in a single transaction. Other processes may depend on
+  the table and will be blocked until you commit.
+- Commit every 500 rows (adjust if PROJECT CONTEXT specifies a limit):
+    BATCH_SIZE = 500
+    batch = []
+    for row in reader:
+        batch.append(build_record(row))
+        if len(batch) >= BATCH_SIZE:
+            session.bulk_insert_mappings(MyTable, batch)
+            session.commit()   # releases row/page locks — target: under 60-120 s per batch
+            batch.clear()
+    if batch:
+        session.bulk_insert_mappings(MyTable, batch)
+        session.commit()
+- For full LOAD / REPLACE operations (truncate-then-reload) a single transaction is
+  acceptable, but still process and insert in chunks to control memory.
+
+DATABASE OPERATIONS
+- For EXEC SQL: use sqlalchemy (preferred) or a raw cursor with parameterized queries.
+  Never construct SQL by string concatenation.
+- For EXEC CICS READ/WRITE/REWRITE/DELETE: convert to equivalent SQLAlchemy table operations.
+- Mark every database call with an inline comment on its own line ABOVE the call:
+    # DB_OPERATION: <one-sentence description of what this query does>
+- Group the SQLAlchemy engine/session setup in a shared helper; if another module in the
+  system already defines get_db_session(), import it instead of redefining it.
+
+BUSINESS LOGIC
+- Preserve all conditional logic, calculations, loops, and validations exactly as coded.
+  Do not simplify or omit any logic.
+- Translate COBOL EVALUATE to Python match/case or if/elif chains.
+- Translate PERFORM ... UNTIL / PERFORM ... VARYING to while/for loops.
+
+ERROR HANDLING
+- Translate COBOL status codes (FILE STATUS, SQLCODE) to Python exceptions or return codes.
+- Wrap database calls in try/except blocks that re-raise as a descriptive RuntimeError.
+
+OUTPUT
+Output ONLY valid Python code. No markdown fences. No explanatory prose outside docstrings
+and inline comments. If the source was truncated, add a stub function with a # TODO comment
+for the missing portion."""
+
+    _ETL_SYSTEM_PROMPT = """You are a senior developer converting legacy COBOL programs to idiomatic Python 3.11.
+You will be given one COBOL source file plus system context per request. Produce the ETL
+VERSION: fully file-based, ZERO database connections. The ETL environment performs all
+database interaction; this Python code only reads and writes pipe-delimited text files.
+
+FILE FORMAT — ALL ETL FILES USE THIS FORMAT UNLESS PROJECT CONTEXT BELOW OVERRIDES IT:
+- Delimiter  : pipe character  |
+- File extension: .txt
+- Encoding   : UTF-8
+- First row  : column headers (pipe-delimited)
+- Subsequent rows: data rows
+- Example row: POLICY_ID|CUSTOMER_ID|EFFECTIVE_DATE|AMOUNT
+               10042|9981|2026-01-15|1250.00
+
+FILE NAMES ARE DEFAULTS
+The read/write file names given in the task message (etl_in_<TABLE>.txt / etl_out_<TABLE>.txt)
+are DEFAULTS assigned by static analysis, not fixed requirements. If PROJECT CONTEXT below
+names an exact file for a given table or data source, use that exact name and format
+instead — PROJECT CONTEXT always overrides the defaults shown in the task message.
+
+ETL INPUT FILES (data provided BY the ETL environment BEFORE this module runs):
+- For every database READ in the original COBOL, read from the input file named in the task
+  message (or the PROJECT CONTEXT override) instead of querying the database.
+- At module start, raise FileNotFoundError with a clear message if a required input file
+  is missing.
+- Mark each file read with:
+    # ETL_INPUT: <filename> — provided by ETL job "<job description>"
+
+ETL OUTPUT FILES (data produced BY this module FOR the ETL environment AFTER it runs):
+- For every database INSERT / UPDATE / DELETE, write the output file named in the task
+  message (or the PROJECT CONTEXT override).
+- Stream output rows one at a time — open the file before the processing loop, write the
+  header row immediately, then write each row inside the loop as it is produced. Do NOT
+  accumulate rows in a list first.
+  Example pattern:
+      with open('etl_out_<TABLE>.txt', 'w', encoding='utf-8', newline='') as f:
+          writer = csv.DictWriter(f, fieldnames=FIELD_NAMES, delimiter='|')
+          writer.writeheader()
+          for ...:
+              writer.writerow(row)
+- Mark each output file write with:
+    # ETL_OUTPUT: <filename> — consumed by ETL job "<job description>"
+
+MODULE-LEVEL ETL CONTRACT
+Immediately below the module docstring, add this comment block — fill in every file using
+the actual file names you used (defaults or PROJECT CONTEXT overrides):
+    # -- ETL CONTRACT ------------------------------------------------------
+    # INPUT FILES  (must exist before this module runs - provided by ETL):
+    #   <filename>   | source: <TABLE> | schema: COL1|COL2|...
+    #   (one line per input file)
+    #
+    # OUTPUT FILES (produced by this module - consumed by ETL after it runs):
+    #   <filename>  | target: <TABLE> | operation: INSERT|UPDATE|DELETE
+    #               | schema: COL1|COL2|...
+    #   (one line per output file)
+    #
+    # ETL JOB SPECIFICATIONS:
+    #   Input  job: "<job name>" must SELECT <columns> FROM <table> WHERE <condition>
+    #               and write the input file before this module runs.
+    #   Output job: "<job name>" must read the output file and
+    #               INSERT/UPDATE/DELETE <table> using the following column mapping:
+    #               file_col -> table_col, ...
+    # ------------------------------------------------------------------------
+
+ETL FILE PROCESSING ASSUMPTIONS
+These are system-level defaults. If PROJECT CONTEXT below explicitly contradicts any
+assumption below, PROJECT CONTEXT takes precedence.
+
+1. FILES ARE LARGER THAN AVAILABLE MEMORY
+   Read input files row by row using csv.DictReader as an iterator -- never call
+   list(reader), readlines(), or read() on an ETL file:
+       with open('etl_in_<TABLE>.txt', encoding='utf-8', newline='') as f:
+           reader = csv.DictReader(f, delimiter='|')
+           for row in reader:   # one dict per row -- no full-file load
+               ...
+   Write output files row by row as shown in ETL OUTPUT FILES above.
+   Use running accumulators for totals/counts instead of collecting rows:
+       total = Decimal('0'); record_count = 0
+       for row in reader:
+           total += Decimal(row['AMOUNT'].strip() or '0')
+           record_count += 1
+
+2. INPUT FILES ARE UNSORTED
+   Do not assume records arrive in any particular order unless PROJECT CONTEXT explicitly
+   states otherwise (e.g. "file is sorted by POLICY_KEY ascending"). If sorted order is
+   required by the logic but not guaranteed, document it as a precondition in the ETL
+   CONTRACT comment block:
+       # Input job must ORDER BY <column> before writing this file
+
+3. FIELDS MAY BE EMPTY OR PADDED
+   Any field can arrive as an empty string or with surrounding whitespace. Strip before
+   using and guard before type-casting:
+       raw = row['AMOUNT'].strip()
+       amount = Decimal(raw) if raw else Decimal('0')
+
+4. FILE OPEN PARAMETERS
+   Always open ETL files with encoding='utf-8' and newline='':
+       open('etl_in_<TABLE>.txt', encoding='utf-8', newline='')
+   The newline='' argument tells Python NOT to do its own line-ending conversion before
+   the csv module reads the data -- without it, Windows-style \\r\\n endings can cause rows
+   to be misread. The csv module handles line endings itself. Override encoding only if
+   PROJECT CONTEXT specifies otherwise.
+
+CONNECTED SYSTEM — PACKAGE STRUCTURE
+- All COBOL programs in this scan are part of one system. The generated Python files are
+  modules that live in the same directory. Treat them as such.
+- IMPORTS MUST WORK WHETHER THIS FILE IS RUN DIRECTLY (python module_name.py) OR AS A
+  PACKAGE (python -m package.module). A relative import (from . import x) fails with
+  "attempted relative import with no known parent package" when the file is run directly.
+  Avoid that failure mode:
+    1. At the very top of the file, before any local imports, add:
+         import sys
+         from pathlib import Path
+         sys.path.insert(0, str(Path(__file__).resolve().parent))
+    2. Import sibling modules with a PLAIN import — never a relative import:
+         import <module_name>          # NOT: from . import <module_name>
+       Call its functions as <module_name>.<function_name>(...), or use
+       from <module_name> import <function_name> after the sys.path insert.
+- For every COBOL CALL statement, call the appropriate function in the imported module.
+  Do NOT duplicate logic.
+- For COBOL COPY statements (copybooks), import AND ACTIVELY USE shared data structures or
+  constants from the corresponding module. Instantiate <module>.<RecordType> or reference
+  <module>.FIELD_NAMES when parsing rows from input files and when writing column headers
+  and data rows to output files — do not redefine those structures inline.
+- For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN declarations), treat exactly like a
+  COPY: import the corresponding module's data structure (dataclass or TypedDict) and use
+  its field names as the pipe-delimited column headers in the ETL files.
+- If this program is the system entry point, add an if __name__ == "__main__": block that
+  calls main().
+- If this is a called subprogram or utility, expose its primary logic as a clearly named
+  public function (not wrapped in __main__).
+
+INTER-MODULE CALLS
+- When calling a function in another module, use EXACTLY the signature shown in the KNOWN
+  DEPENDENCY INTERFACES block, when one is provided. Match parameter names, types, and order.
+- If no interface is shown for a dependency (marked "not yet transformed"), add
+  # TODO: verify signature on the call line and infer from the CALL USING clause.
+
+STRUCTURE
+- Produce a single Python module (.py file).
+- Add a module-level docstring covering: program purpose, key inputs, key outputs, entry
+  point function name, and which other modules it calls or is called by.
+- Mirror the COBOL division structure through classes or clearly named functions:
+  identify/initialise → validate_inputs → process → finalise.
+- Use snake_case for all identifiers. Map COBOL data-names to readable equivalents
+  (e.g. WS-ACCT-NUM → account_number).
+- Add type hints wherever the type is unambiguous from the COBOL context.
+
+BUSINESS LOGIC
+- Preserve all conditional logic, calculations, loops, and validations exactly as coded.
+  Do not simplify or omit any logic.
+- Translate COBOL EVALUATE to Python match/case or if/elif chains.
+- Translate PERFORM ... UNTIL / PERFORM ... VARYING to while/for loops.
+
+ERROR HANDLING
+- Translate COBOL status codes (FILE STATUS, SQLCODE) to Python exceptions or return codes.
+- Wrap file I/O operations (open, csv.reader, csv.writer) in try/except blocks that re-raise
+  as a descriptive RuntimeError.
+
+OUTPUT
+Output ONLY valid Python code. No markdown fences. No explanatory prose outside docstrings
+and inline comments. If the source was truncated, add a stub function with a # TODO comment
+for the missing portion."""
 
     def __init__(self, context_block: str = ""):
         self.llm = AzureLLMClient()
@@ -322,7 +609,6 @@ class CobolToPythonTransformer:
         known_interfaces: str,
         was_truncated: bool,
     ) -> str:
-        ctx_block   = f"\n\nPROJECT CONTEXT — Context provided by a user. User context should take precedence over below defaults and assumptions:\n{self.context_block}" if self.context_block else ""
         dep_block   = f"\n\nDependency context (which programs this one CALLs or COPYs):\n{dep_ctx}" if dep_ctx else ""
         doc_block   = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
         sys_block   = f"\n\nSYSTEM MAP — all programs in this system and their Python module names:\n{sys_ctx}" if sys_ctx else ""
@@ -334,130 +620,24 @@ class CobolToPythonTransformer:
         )
 
         is_copybook = filename.upper().endswith(".CPY")
-        schema_block = """
-FIELD SCHEMA CONSTANTS (this file is a .CPY copybook — all three constants are REQUIRED)
-This module defines a shared record layout. Immediately after any class definitions,
-include EXACTLY these three module-level constants derived from the COBOL PIC clauses:
+        schema_block = ("\n\n" + _COPYBOOK_SCHEMA_BLOCK) if is_copybook else ""
 
-  FIELD_NAMES: list[str] = [
-      'field_one', 'field_two', ...   # every field in source-definition order
-  ]
-
-  _FIELD_MAX_LENGTHS: dict[str, int] = {  # maximum character / digit count from PIC
-      'field_one': 10,   # PIC X(10)
-      'field_two': 5,    # PIC 9(5)
-      ...
-  }
-
-  FIELD_DATA_TYPES: dict[str, str] = {    # Python type name derived from PIC clause
-      'field_one':   'str',      # PIC X(n) / PIC A(n)       → str
-      'field_two':   'int',      # PIC 9(n) DISPLAY           → int
-      'field_three': 'Decimal',  # PIC 9(n)V9(m) or COMP-3   → Decimal
-      ...
-  }
-
-These constants are consumed by every dependent module to construct ETL pipe-delimited
-file headers, validate field lengths, and understand the full data layout. They MUST
-reflect the actual PIC clauses — do not guess or omit any field.""" if is_copybook else ""
-
-        prompt = f"""You are a senior developer converting a legacy COBOL program to Python 3.11.
-
-COBOL file: {filename}{ctx_block}{dep_block}{doc_block}{sys_block}{iface_block}
+        prompt = f"""COBOL file: {filename}{dep_block}{doc_block}{sys_block}{iface_block}
 
 COBOL SOURCE:{trunc_note}
-{source}
+{source}{schema_block}
 
-=== TASK: DATABASE VERSION ===
+=== TASK ===
+Convert this COBOL file to the DATABASE VERSION, following the system rules you were given."""
 
-Convert this COBOL program to idiomatic Python. This version retains all database
-and file operations as real database calls. Follow these rules exactly:
+        system_message = self._DB_SYSTEM_PROMPT
+        if self.context_block:
+            system_message += (
+                "\n\nPROJECT CONTEXT — Context provided by a user. User context should take "
+                f"precedence over the defaults and assumptions above:\n{self.context_block}"
+            )
 
-CONNECTED SYSTEM — PACKAGE STRUCTURE
-- All COBOL programs in this scan are part of ONE system. The generated Python files
-  are modules in the same package. Treat them as such.
-- For every COBOL CALL statement, use a relative import: from . import <module_name>
-  and call the appropriate function in that module. Do NOT duplicate logic.
-- For COBOL COPY statements (copybooks), import shared data structures or constants
-  from the corresponding Python module: from . import <copybook_module>
-- For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN table declarations), treat exactly
-  like a COPY: from . import <member_lower>  — the member maps to a Python module that
-  defines the table's data structure (dataclass or TypedDict).
-- If this program is the system entry point, add an if __name__ == "__main__": block
-  that calls main().
-- If this is a called subprogram or utility, expose its primary logic as a
-  clearly named public function (not wrapped in __main__).
-
-INTER-MODULE CALLS
-- When calling a function in another module, use EXACTLY the signature shown in the
-  KNOWN DEPENDENCY INTERFACES block above. Match parameter names, types, and order precisely.
-- If no interface is shown for a dependency (it is marked "not yet transformed"), add
-  # TODO: verify signature on the call line and use your best inference from the CALL USING clause.
-
-STRUCTURE
-- Produce a single Python module (.py file).
-- Add a module-level docstring covering: program purpose, key inputs, key outputs,
-  entry point function name, and which other modules it calls or is called by.
-- Mirror the COBOL division structure through classes or clearly named functions:
-  identify/initialise → validate_inputs → process → finalise.
-- Use snake_case for all identifiers. Map COBOL data-names to readable equivalents
-  (e.g. WS-ACCT-NUM → account_number).
-- Add type hints wherever the type is unambiguous from the COBOL context.
-{schema_block}
-FILE I/O ASSUMPTIONS
-File reading is a process-level concern, not ETL-specific. Any file this program
-reads (third-party CSV, control file, feed file) must be treated as potentially
-too large to fit in memory, regardless of the operation that follows.
-If the business documentation context above says otherwise, follow that instead.
-
-STREAMING READS — always iterate row by row, never load the whole file:
-    with open('input.csv', encoding='utf-8', newline='') as f:
-        reader = csv.DictReader(f, delimiter='|')
-        for row in reader:   # one row at a time — never list(reader) or readlines()
-            ...
-
-BATCH COMMITS — releasing locks for INSERT / UPDATE operations:
-- Do not wrap an entire file load in a single transaction. Other processes may
-  depend on the table and will be blocked until you commit.
-- Commit every 500 rows (adjust if the business documentation specifies a limit):
-    BATCH_SIZE = 500
-    batch = []
-    for row in reader:
-        batch.append(build_record(row))
-        if len(batch) >= BATCH_SIZE:
-            session.bulk_insert_mappings(MyTable, batch)
-            session.commit()   # releases row/page locks — target: under 60–120 s per batch
-            batch.clear()
-    if batch:
-        session.bulk_insert_mappings(MyTable, batch)
-        session.commit()
-- For full LOAD / REPLACE operations (truncate-then-reload) a single transaction
-  is acceptable, but still process and insert in chunks to control memory.
-
-DATABASE OPERATIONS
-- For EXEC SQL: use sqlalchemy (preferred) or a raw cursor with parameterized queries.
-  Never construct SQL by string concatenation.
-- For EXEC CICS READ/WRITE/REWRITE/DELETE: convert to equivalent SQLAlchemy table operations.
-- Mark every database call with an inline comment on its own line ABOVE the call:
-    # DB_OPERATION: <one-sentence description of what this query does>
-- Group the SQLAlchemy engine/session setup in a shared helper; if another module in
-  the system already defines get_db_session(), import it instead of redefining it.
-
-BUSINESS LOGIC
-- Preserve all conditional logic, calculations, loops, and validations exactly as coded.
-  Do not simplify or omit any logic.
-- Translate COBOL EVALUATE to Python match/case or if/elif chains.
-- Translate PERFORM … UNTIL / PERFORM … VARYING to while/for loops.
-
-ERROR HANDLING
-- Translate COBOL status codes (FILE STATUS, SQLCODE) to Python exceptions or return codes.
-- Wrap database calls in try/except blocks that re-raise as a descriptive RuntimeError.
-
-OUTPUT
-Output ONLY valid Python code. No markdown fences. No explanatory prose outside docstrings
-and inline comments. If the source was truncated, add a stub function with a # TODO comment
-for the missing portion."""
-
-        return self.llm.query(prompt, max_tokens=64_000)
+        return self.llm.query(prompt, system_message=system_message, max_tokens=64_000)
 
     # ------------------------------------------------------------------
     # ETL file version
@@ -474,7 +654,6 @@ for the missing portion."""
         known_interfaces: str,
         was_truncated: bool,
     ) -> str:
-        ctx_block   = f"\n\nPROJECT CONTEXT — Context provided by a user. User context should take precedence over below defaults and assumptions:\n{self.context_block}" if self.context_block else ""
         dep_block   = f"\n\nDependency context (which programs this one CALLs or COPYs):\n{dep_ctx}" if dep_ctx else ""
         doc_block   = f"\n\nBusiness documentation context:\n{doc_ctx[:3000]}" if doc_ctx else ""
         sys_block   = f"\n\nSYSTEM MAP — all programs in this system and their Python module names:\n{sys_ctx}" if sys_ctx else ""
@@ -485,31 +664,7 @@ for the missing portion."""
         )
 
         is_copybook = filename.upper().endswith(".CPY")
-        schema_block = """
-FIELD SCHEMA CONSTANTS (this file is a .CPY copybook — all three constants are REQUIRED)
-This module defines a shared record layout. Immediately after any class definitions,
-include EXACTLY these three module-level constants derived from the COBOL PIC clauses:
-
-  FIELD_NAMES: list[str] = [
-      'field_one', 'field_two', ...   # every field in source-definition order
-  ]
-
-  _FIELD_MAX_LENGTHS: dict[str, int] = {  # maximum character / digit count from PIC
-      'field_one': 10,   # PIC X(10)
-      'field_two': 5,    # PIC 9(5)
-      ...
-  }
-
-  FIELD_DATA_TYPES: dict[str, str] = {    # Python type name derived from PIC clause
-      'field_one':   'str',      # PIC X(n) / PIC A(n)       → str
-      'field_two':   'int',      # PIC 9(n) DISPLAY           → int
-      'field_three': 'Decimal',  # PIC 9(n)V9(m) or COMP-3   → Decimal
-      ...
-  }
-
-These constants are consumed by every dependent module to construct ETL pipe-delimited
-file headers, validate field lengths, and understand the full data layout. They MUST
-reflect the actual PIC clauses — do not guess or omit any field.""" if is_copybook else ""
+        schema_block = ("\n\n" + _COPYBOOK_SCHEMA_BLOCK) if is_copybook else ""
 
         # SQL_CURSOR (OPEN/FETCH/CLOSE on a cursor name) is excluded — the actual table
         # is already listed as a SQL_SELECT from the DECLARE CURSOR FOR SELECT statement.
@@ -521,181 +676,40 @@ reflect the actual PIC clauses — do not guess or omit any field.""" if is_copy
         read_block = (
             "\n".join(
                 f"  Line {op.line_number}: [{op.operation_type.value}] {op.description}"
-                f"  → input file: etl_in_{op.table_or_file.lower()}.txt"
+                f"  → default input file: etl_in_{op.table_or_file.lower()}.txt"
                 for op in read_ops
             ) or "  (none detected by static analysis)"
         )
         write_block = (
             "\n".join(
                 f"  Line {op.line_number}: [{op.operation_type.value}] {op.description}"
-                f"  → output file: etl_out_{op.table_or_file.lower()}.txt"
+                f"  → default output file: etl_out_{op.table_or_file.lower()}.txt"
                 for op in write_ops
             ) or "  (none detected by static analysis)"
         )
 
-        prompt = f"""You are a senior developer converting a legacy COBOL program to Python 3.11.
+        prompt = f"""COBOL file: {filename}{dep_block}{doc_block}{sys_block}{iface_block}
 
-COBOL file: {filename}{ctx_block}{dep_block}{doc_block}{sys_block}{iface_block}
-
-Database READ operations detected (each becomes a file read from ETL-provided input):
+Database READ operations detected (default input files — your PROJECT CONTEXT instructions override these if they name specific files):
 {read_block}
 
-Database WRITE operations detected (each becomes a file write for ETL to process):
+Database WRITE operations detected (default output files — your PROJECT CONTEXT instructions override these if they name specific files):
 {write_block}
 
 COBOL SOURCE:{trunc_note}
-{source}
+{source}{schema_block}
 
-=== TASK: ETL VERSION — FULLY FILE-BASED, NO DATABASE CONNECTIONS ===
+=== TASK ===
+Convert this COBOL file to the ETL VERSION, following the system rules you were given."""
 
-This Python version has ZERO database connections. The ETL environment is responsible
-for all database interaction. The Python code communicates with the ETL environment
-exclusively through pipe-delimited text files.
+        system_message = self._ETL_SYSTEM_PROMPT
+        if self.context_block:
+            system_message += (
+                "\n\nPROJECT CONTEXT — Context provided by a user. User context should take "
+                f"precedence over the defaults and assumptions above:\n{self.context_block}"
+            )
 
-FILE FORMAT — ALL FILES MUST USE THIS FORMAT:
-- Delimiter  : pipe character  |
-- File extension: .txt
-- Encoding   : UTF-8
-- First row  : column headers (pipe-delimited)
-- Subsequent rows: data rows
-- Example row: POLICY_ID|CUSTOMER_ID|EFFECTIVE_DATE|AMOUNT
-               10042|9981|2026-01-15|1250.00
-
-ETL INPUT FILES (data provided BY the ETL environment BEFORE this module runs):
-- For every database READ in the original COBOL, read from a pipe-delimited input file
-  named etl_in_<TABLE_NAME>.txt instead of querying the database.
-- At module start, raise FileNotFoundError with a clear message if a required input
-  file is missing.
-- Mark each file read with:
-    # ETL_INPUT: <filename> — provided by ETL job "<job description>"
-
-ETL OUTPUT FILES (data produced BY this module FOR the ETL environment AFTER it runs):
-- For every database INSERT / UPDATE / DELETE, write a pipe-delimited output file
-  named etl_out_<TABLE_NAME>.txt.
-- Stream output rows one at a time — open the file before the processing loop,
-  write the header row immediately, then write each row inside the loop as it is
-  produced. Do NOT accumulate rows in a list first.
-  Example pattern:
-      with open('etl_out_<TABLE>.txt', 'w', encoding='utf-8', newline='') as f:
-          writer = csv.DictWriter(f, fieldnames=FIELD_NAMES, delimiter='|')
-          writer.writeheader()
-          for ...:
-              writer.writerow(row)
-- Mark each output file write with:
-    # ETL_OUTPUT: <filename> — consumed by ETL job "<job description>"
-
-MODULE-LEVEL ETL CONTRACT
-Immediately below the module docstring, add this comment block — fill in every file:
-    # ── ETL CONTRACT ──────────────────────────────────────────────────────────
-    # INPUT FILES  (must exist before this module runs — provided by ETL):
-    #   etl_in_<TABLE>.txt   | source: <TABLE> | schema: COL1|COL2|...
-    #   (one line per input file)
-    #
-    # OUTPUT FILES (produced by this module — consumed by ETL after it runs):
-    #   etl_out_<TABLE>.txt  | target: <TABLE> | operation: INSERT|UPDATE|DELETE
-    #                        | schema: COL1|COL2|...
-    #   (one line per output file)
-    #
-    # ETL JOB SPECIFICATIONS:
-    #   Input  job: "<job name>" must SELECT <columns> FROM <table> WHERE <condition>
-    #               and write etl_in_<TABLE>.txt before this module runs.
-    #   Output job: "<job name>" must read etl_out_<TABLE>.txt and
-    #               INSERT/UPDATE/DELETE <table> using the following column mapping:
-    #               file_col → table_col, ...
-    # ─────────────────────────────────────────────────────────────────────────
-
-ETL FILE PROCESSING ASSUMPTIONS
-These are system-level defaults. If the business documentation context at the top
-of this prompt explicitly contradicts any assumption below, the business context
-takes precedence — always follow what the user has specified over these defaults.
-
-1. FILES ARE LARGER THAN AVAILABLE MEMORY
-   Read input files row by row using csv.DictReader as an iterator — never call
-   list(reader), readlines(), or read() on an ETL file:
-       with open('etl_in_<TABLE>.txt', encoding='utf-8', newline='') as f:
-           reader = csv.DictReader(f, delimiter='|')
-           for row in reader:   # one dict per row — no full-file load
-               ...
-   Write output files row by row as shown in ETL OUTPUT FILES above.
-   Use running accumulators for totals/counts instead of collecting rows:
-       total = Decimal('0'); record_count = 0
-       for row in reader:
-           total += Decimal(row['AMOUNT'].strip() or '0')
-           record_count += 1
-
-2. INPUT FILES ARE UNSORTED
-   Do not assume records arrive in any particular order unless the business
-   documentation context explicitly states otherwise (e.g. "file is sorted by
-   POLICY_KEY ascending"). If sorted order is required by the logic but not
-   guaranteed, document it as a precondition in the ETL CONTRACT comment block:
-       # Input job must ORDER BY <column> before writing etl_in_<TABLE>.txt
-
-3. FIELDS MAY BE EMPTY OR PADDED
-   Any field can arrive as an empty string or with surrounding whitespace.
-   Strip before using and guard before type-casting:
-       raw = row['AMOUNT'].strip()
-       amount = Decimal(raw) if raw else Decimal('0')
-
-4. FILE OPEN PARAMETERS
-   Always open ETL files with encoding='utf-8' and newline='':
-       open('etl_in_<TABLE>.txt', encoding='utf-8', newline='')
-   The newline='' argument tells Python NOT to do its own line-ending conversion
-   before the csv module reads the data — without it, Windows-style \\r\\n endings
-   can cause rows to be misread. The csv module handles line endings itself.
-   Override encoding only if the business documentation context specifies otherwise.
-
-CONNECTED SYSTEM — PACKAGE STRUCTURE
-- All COBOL programs in this scan are part of ONE system. The generated Python files
-  are modules in the same package. Treat them as such.
-- For every COBOL CALL statement, use a relative import: from . import <module_name>
-  and call the appropriate function in that module. Do NOT duplicate logic.
-- For COBOL COPY statements (copybooks), import and actively USE shared data structures
-  or constants from the corresponding Python module: from . import <copybook_module>
-  Instantiate <copybook_module>.<RecordType> or reference <copybook_module>.FIELD_NAMES
-  when parsing rows from etl_in_*.txt and when writing column headers and data rows to
-  etl_out_*.txt — do not redefine those structures inline.
-- For EXEC SQL INCLUDE <member> END-EXEC (DB2 DCLGEN table declarations), treat exactly
-  like a COPY: from . import <member_lower>  — the member maps to a Python module that
-  defines the table's data structure (dataclass or TypedDict); use its field names as
-  the pipe-delimited column headers in the ETL files.
-- If this program is the system entry point, add an if __name__ == "__main__": block
-  that calls main().
-- If this is a called subprogram or utility, expose its primary logic as a
-  clearly named public function (not wrapped in __main__).
-
-INTER-MODULE CALLS
-- When calling a function in another module, use EXACTLY the signature shown in the
-  KNOWN DEPENDENCY INTERFACES block above. Match parameter names, types, and order precisely.
-- If no interface is shown for a dependency (it is marked "not yet transformed"), add
-  # TODO: verify signature on the call line and use your best inference from the CALL USING clause.
-
-STRUCTURE
-- Produce a single Python module (.py file).
-- Add a module-level docstring covering: program purpose, key inputs, key outputs,
-  entry point function name, and which other modules it calls or is called by.
-- Mirror the COBOL division structure through classes or clearly named functions:
-  identify/initialise → validate_inputs → process → finalise.
-- Use snake_case for all identifiers. Map COBOL data-names to readable equivalents
-  (e.g. WS-ACCT-NUM → account_number).
-- Add type hints wherever the type is unambiguous from the COBOL context.
-{schema_block}
-BUSINESS LOGIC
-- Preserve all conditional logic, calculations, loops, and validations exactly as coded.
-  Do not simplify or omit any logic.
-- Translate COBOL EVALUATE to Python match/case or if/elif chains.
-- Translate PERFORM … UNTIL / PERFORM … VARYING to while/for loops.
-
-ERROR HANDLING
-- Translate COBOL status codes (FILE STATUS, SQLCODE) to Python exceptions or return codes.
-- Wrap file I/O operations (open, csv.reader, csv.writer) in try/except blocks that
-  re-raise as a descriptive RuntimeError.
-
-OUTPUT
-Output ONLY valid Python code. No markdown fences. No explanatory prose outside docstrings
-and inline comments. If the source was truncated, add a stub function with a # TODO comment
-for the missing portion."""
-
-        return self.llm.query(prompt, max_tokens=64_000)
+        return self.llm.query(prompt, system_message=system_message, max_tokens=64_000)
 
     # ------------------------------------------------------------------
     # Assumptions extraction
