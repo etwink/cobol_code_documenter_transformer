@@ -274,9 +274,14 @@ class ETLDetector:
            verbs are implementation detail that would otherwise generate spurious
            duplicate ETL file entries.
 
-        3. General dedup: for each (table_or_file, is_read) pair keep only the
-           highest-priority operation type. If two ops have the same priority
-           (same type, different lines), keep the one with the lower line number.
+        3. General dedup: for each (table_or_file, is_read) pair, find the
+           highest-priority operation type present and drop ops of any lower-
+           priority type for that same key (e.g. a leftover SQL_CURSOR once a
+           SQL_SELECT already covers the table). Ops that share the winning
+           type are ALL kept — two SQL_SELECTs against the same table at
+           different lines are genuinely distinct statements, not duplicates.
+           Collapsing them down to one (the old behavior) silently dropped
+           real operations before they ever reached the LLM prompt.
         """
         # Pass 1: find file names that already have substantive ops
         substantive_files: set[str] = {
@@ -300,18 +305,22 @@ class ETLDetector:
 
             filtered.append(op)
 
-        # Pass 3: keep best (highest priority) per (table_or_file, is_read)
-        best: dict[tuple[str, bool], ETLOperation] = {}
+        # Pass 3: find the winning (highest-priority) operation type per
+        # (table_or_file, is_read) key, then keep every op of that type —
+        # not just one. Ops of a lower-priority type for the same key are
+        # dropped (they're the redundant signal this pass exists to remove).
+        best_type: dict[tuple[str, bool], OperationType] = {}
         for op in filtered:
             key = (op.table_or_file, op.is_read)
-            existing = best.get(key)
-            if existing is None:
-                best[key] = op
-            else:
-                if _OP_PRIORITY.get(op.operation_type, 0) > _OP_PRIORITY.get(existing.operation_type, 0):
-                    best[key] = op
+            current = best_type.get(key)
+            if current is None or _OP_PRIORITY.get(op.operation_type, 0) > _OP_PRIORITY.get(current, 0):
+                best_type[key] = op.operation_type
 
-        return sorted(best.values(), key=lambda o: o.line_number)
+        result = [
+            op for op in filtered
+            if op.operation_type == best_type[(op.table_or_file, op.is_read)]
+        ]
+        return sorted(result, key=lambda o: o.line_number)
 
     def extract_from_file(self, path: Path) -> list[ETLOperation]:
         source = _read_cobol(path)

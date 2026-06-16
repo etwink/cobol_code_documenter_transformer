@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-16 · `pending` (deterministic completeness check + targeted re-prompt)
+
+### Added — Post-generation completeness check against static-analysis ground truth
+- `cobol_transformer.py`: new `_ensure_completeness()` runs after both the DB and ETL versions are generated (after chunk synthesis too, if chunked). For each detected `ETLOperation` (excluding `SQL_CURSOR`, which is intentionally folded into its underlying table's `SQL_SELECT` entry), checks the generated code for evidence the operation was actually handled — the default `etl_in_*.txt`/`etl_out_*.txt` filename or a `source:`/`target:` ETL CONTRACT reference for the ETL version, the table/file name itself for the DB version
+- This is a deterministic check, not an LLM self-review pass: a generating LLM that drops an operation because it never saw it (or lost it in a long source) can share the same blind spot if asked to review its own output, so the check instead diffs against the static-analysis `etl_ops` list directly
+- If any operations are missing, `_fix_missing_ops()` sends ONE targeted follow-up call: names the exact missing operation(s), includes a focused COBOL excerpt around each (via new `_extract_context_lines()` helper, not the full source), includes the complete previous code, and asks for the complete corrected file back. Does not loop — a single retry handles the common "dropped during generation" case
+- Rationale: prompted by a bug where ETL dedup (see above) silently dropped a second `SQL_SELECT` against an already-seen table before it ever reached the LLM; this check catches that failure mode (and any other generation-time drop) regardless of root cause, without requiring a heavier plan→build→review→refine agentic loop
+
+---
+
+## [Unreleased] — 2026-06-16 · `pending` (ETL dedup was dropping distinct SQL statements)
+
+### Fixed — Pass 3 of `_deduplicate()` collapsed genuinely distinct SQL operations on the same table
+- `etl_detector.py` / `_deduplicate()`: pass 3 keyed on `(table_or_file, is_read)` and kept only a single "best" operation per key — correct when the competing ops were different types (e.g. a leftover `SQL_CURSOR` once a `SQL_SELECT` already covered the table), but wrong when two ops shared the same type at different line numbers, e.g. two separate `SQL_SELECT` statements against the same table. The second statement was silently discarded before it ever reached the LLM prompt's "Database READ operations detected" block, so the generated ETL code had no input-file entry for it at all
+- Changed pass 3 to compute the winning (highest-priority) operation type per key, then keep every op that matches that type instead of just one; ops of a lower-priority type for the same key are still dropped, preserving the original cursor/infrastructure dedup behavior
+
+---
+
 ## [Unreleased] — 2026-06-15 · `pending` (ETL streaming + guardrail assumptions)
 
 ### Improved — Both DB and ETL prompts enforce streaming file I/O; DB version adds batch-commit guidance

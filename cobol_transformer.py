@@ -390,6 +390,9 @@ for the missing portion."""
                 label="ETL version",
             )
 
+        db_code  = self._ensure_completeness(db_code,  source, cobol_path.name, etl_ops, "db")
+        etl_code = self._ensure_completeness(etl_code, source, cobol_path.name, etl_ops, "etl")
+
         assumptions = self._call_assumptions(source[:8_000], *common_args[:3])
         notes = _build_transformation_notes(cobol_path.name, etl_ops, was_truncated, is_chunked, len(chunks))
 
@@ -430,6 +433,151 @@ for the missing portion."""
             return self._extract_assumptions(*args)
         except Exception:
             return []
+
+    # ------------------------------------------------------------------
+    # Completeness check — deterministic verification against etl_ops,
+    # with a single targeted re-prompt if anything detected by static
+    # analysis is missing from the generated code.
+    # ------------------------------------------------------------------
+
+    def _ensure_completeness(
+        self,
+        code: str,
+        source: str,
+        filename: str,
+        etl_ops: list[ETLOperation],
+        version: str,   # "db" or "etl"
+    ) -> str:
+        """Verify every detected database/file operation is represented in `code`.
+
+        This is a deterministic check against the static-analysis ground truth
+        (etl_ops), not an LLM self-review — a generating LLM that dropped an
+        operation because it was never told about it (or lost it in a long
+        source) can share the same blind spot if asked to review its own
+        output. Checking against etl_ops catches that class of bug directly.
+
+        If anything is missing, sends ONE targeted follow-up call naming the
+        exact missing operation(s) and asking for the complete corrected file.
+        Does not loop or re-check after the fix — a single retry is cheap and
+        handles the common "dropped during generation" case; a persistent
+        miss after the retry is left for the user/reviewer to catch.
+        """
+        missing = self._find_missing_ops(code, etl_ops, version)
+        if not missing:
+            return code
+        return self._call_llm(
+            self._fix_missing_ops, code, source, filename, missing, version,
+            label=f"{version.upper()} completeness fix",
+        )
+
+    def _find_missing_ops(
+        self, code: str, etl_ops: list[ETLOperation], version: str,
+    ) -> list[ETLOperation]:
+        """Return the subset of etl_ops with no evidence in `code`.
+
+        SQL_CURSOR ops are excluded from both versions: the cursor name itself
+        is rarely emitted verbatim (the real table is already covered by its
+        own SQL_SELECT entry from the DECLARE CURSOR statement), so checking
+        for it would only produce false positives.
+        """
+        code_lower = code.lower()
+        missing: list[ETLOperation] = []
+
+        for op in etl_ops:
+            if op.operation_type == OperationType.SQL_CURSOR:
+                continue
+
+            table = op.table_or_file.lower()
+            variants = {table, table.replace("-", "_"), table.replace("_", "-")}
+
+            if version == "etl":
+                default_name = f"etl_{'in' if op.is_read else 'out'}_{table}.txt"
+                marker_kw = "source" if op.is_read else "target"
+                found = (
+                    default_name in code_lower
+                    or re.search(rf"{marker_kw}\s*:\s*{re.escape(table)}\b", code_lower) is not None
+                    or any(
+                        re.search(rf"etl_(input|output)[^\n]*\b{re.escape(v)}\b", code_lower)
+                        for v in variants
+                    )
+                )
+            else:
+                found = any(re.search(rf"\b{re.escape(v)}\b", code_lower) for v in variants)
+
+            if not found:
+                missing.append(op)
+
+        return missing
+
+    def _fix_missing_ops(
+        self,
+        code: str,
+        source: str,
+        filename: str,
+        missing: list[ETLOperation],
+        version: str,
+    ) -> str:
+        """Send the existing code back to the LLM with the exact gaps named, asking
+        for the complete corrected file (not a diff/patch)."""
+        excerpts = "\n\n".join(
+            f"--- COBOL near line {op.line_number} "
+            f"({op.operation_type.value} on {op.table_or_file}, "
+            f"{'READ' if op.is_read else 'WRITE'}) ---\n"
+            f"{_extract_context_lines(source, op.line_number)}"
+            for op in missing
+        )
+        missing_block = "\n".join(
+            f"  Line {op.line_number}: [{op.operation_type.value}] {op.description} "
+            f"({'READ from' if op.is_read else 'WRITE to'} {op.table_or_file})"
+            for op in missing
+        )
+
+        if version == "etl":
+            file_hint = "\n".join(
+                f"  {'etl_in_' if op.is_read else 'etl_out_'}{op.table_or_file.lower()}.txt "
+                f"({'ETL_INPUT' if op.is_read else 'ETL_OUTPUT'} marker + ETL CONTRACT entry)"
+                for op in missing
+            )
+            version_note = (
+                "This is the ETL VERSION (file-based, zero database calls). Each operation "
+                f"below needs its own file read/write with the matching marker comment, "
+                f"and an entry in the # -- ETL CONTRACT -- block:\n{file_hint}"
+            )
+        else:
+            version_note = (
+                "This is the DATABASE VERSION (real SQL/CICS calls). Each operation below "
+                "needs its own database call marked with # DB_OPERATION: <description>."
+            )
+
+        prompt = f"""You previously converted COBOL file {filename} to Python. Comparing your output
+against static analysis of the source, the following detected operations are NOT
+represented anywhere in your code — they were dropped:
+
+{missing_block}
+
+{version_note}
+
+Relevant COBOL source excerpts (for context — the full file may contain more):
+{excerpts}
+
+Your previous Python code (this is the COMPLETE current file):
+{code}
+
+=== TASK ===
+Return the COMPLETE, corrected Python file. Add proper handling for every missing
+operation listed above, in the correct place relative to the surrounding logic.
+Do not remove, rewrite, or simplify anything that was already correct in the
+existing code — only add what's missing.
+Output ONLY valid Python code. No markdown fences."""
+
+        system_message = self._ETL_SYSTEM_PROMPT if version == "etl" else self._DB_SYSTEM_PROMPT
+        if self.context_block:
+            system_message += (
+                "\n\nPROJECT CONTEXT — Context provided by a user. User context should take "
+                f"precedence over the defaults and assumptions above:\n{self.context_block}"
+            )
+
+        return self.llm.query(prompt, system_message=system_message, max_tokens=64_000)
 
     # ------------------------------------------------------------------
     # Chunking — for files that exceed _CHUNK_THRESHOLD
@@ -780,6 +928,18 @@ def _read_cobol(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return path.read_text(encoding="latin-1")
+
+
+def _extract_context_lines(source: str, line_number: int, before: int = 10, after: int = 15) -> str:
+    """Return a line-numbered excerpt of `source` around `line_number`.
+
+    Used to give the completeness-fix re-prompt a focused, cheap-to-read view
+    of one missing operation instead of resending the entire COBOL file.
+    """
+    lines = source.splitlines()
+    start = max(0, line_number - 1 - before)
+    end = min(len(lines), line_number - 1 + after)
+    return "\n".join(f"{i + 1:>5}: {lines[i]}" for i in range(start, end))
 
 
 def _build_transformation_notes(
