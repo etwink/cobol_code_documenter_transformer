@@ -14,6 +14,7 @@ The output contains:
 from __future__ import annotations
 
 import ast
+import concurrent.futures
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -222,6 +223,7 @@ class _DocumentationBuilder:
         transformations: list[PythonTransformationResult],
         all_etl_ops: list[ETLOperation],
         progress_callback=None,
+        max_workers: int = 3,
     ) -> TransformationDocument:
         cluster_texts = [cs.summary for cs in cluster_summaries]
         all_assumptions = [a for t in transformations for a in t.assumptions]
@@ -241,12 +243,44 @@ class _DocumentationBuilder:
             ("Appendix",               lambda: self._appendix(cluster_texts, all_etl_ops)),
         ]
 
+        # All sections read only from the inputs above plus self.llm / self.ctx
+        # (both read-only after __init__), so they have no inter-dependencies and
+        # are safe to generate concurrently.
         section_map: dict[str, str] = {}
         total = len(sections)
-        for i, (label, fn) in enumerate(sections):
-            if progress_callback:
-                progress_callback(f"Documentation: {label}", i + 1, total)
-            section_map[label] = fn()
+        completed = 0
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        futures = {executor.submit(fn): label for label, fn in sections}
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                label = futures[future]
+                try:
+                    section_map[label] = future.result()
+                except Exception as exc:
+                    msg = str(exc)
+                    if any(kw in msg.lower() for kw in ("content_filter", "content management", "content filter")):
+                        raise RuntimeError(
+                            f"Azure content filter blocked the prompt for documentation section "
+                            f"'{label}'.\n"
+                            f"Check your context_block for language that triggers Azure's content policy.\n"
+                            f"Common triggers: instruction-style phrasing ('you must', 'always', 'ignore', "
+                            f"'override', 'bypass'), OS/shell references, permission-granting language.\n"
+                            f"Original error: {type(exc).__name__}: {msg}\n"
+                            f"See logs/llm_calls.log for the full prompt."
+                        ) from exc
+                    raise RuntimeError(
+                        f"Documentation section '{label}' failed: {type(exc).__name__}: {msg}\n"
+                        f"See logs/llm_calls.log for the full request/response."
+                    ) from exc
+                completed += 1
+                if progress_callback:
+                    progress_callback(f"Documentation: {label}", completed, total)
+        except RuntimeError:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
 
         return TransformationDocument(
             assumptions=section_map["Assumptions"],

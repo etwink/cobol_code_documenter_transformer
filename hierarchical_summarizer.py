@@ -12,6 +12,7 @@ For pure-doc clusters:  all files are summarized together if ≤ 5 files, or in
   batches of 4 that are then rolled up into one cluster summary.
 """
 
+import concurrent.futures
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,37 +43,62 @@ class HierarchicalSummarizer:
         clusters: list[DocumentCluster],
         progress_callback=None,
         context_block: str = "",  # from ProcessContext.to_prompt_block()
+        max_workers: int = 3,
     ) -> list[ClusterSummary]:
         """
-        Summarize all clusters. progress_callback(cluster_name, index, total)
-        is called before each cluster if provided.
-        Raises RuntimeError with the cluster name and a content-filter hint if an LLM call fails.
+        Summarize all clusters, up to max_workers at a time. Clusters are independent
+        of each other so this is safe to parallelize (unlike the COBOL->Python transform,
+        which must process callees before callers).
+
+        progress_callback(cluster_name, completed_count, total) is called as each cluster
+        finishes — order reflects completion time, not submission order, since clusters
+        run concurrently.
+
+        Raises RuntimeError with the cluster name and a content-filter hint if an LLM call
+        fails. On failure, clusters not yet started are cancelled; clusters already running
+        are left to finish in the background rather than blocking the error from surfacing.
         """
-        summaries: list[ClusterSummary] = []
-        for i, cluster in enumerate(clusters):
-            if progress_callback:
-                progress_callback(cluster.cluster_name, i + 1, len(clusters))
-            try:
-                summaries.append(self._summarize_cluster(cluster, context_block))
-            except Exception as exc:
-                msg = str(exc)
-                label = f"cluster '{cluster.cluster_name}' ({i + 1}/{len(clusters)})"
-                if any(kw in msg.lower() for kw in ("content_filter", "content management", "content filter")):
+        results: list[ClusterSummary | None] = [None] * len(clusters)
+        total = len(clusters)
+        completed = 0
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        futures = {
+            executor.submit(self._summarize_cluster, cluster, context_block): (i, cluster)
+            for i, cluster in enumerate(clusters)
+        }
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                i, cluster = futures[future]
+                try:
+                    results[i] = future.result()
+                except Exception as exc:
+                    msg = str(exc)
+                    label = f"cluster '{cluster.cluster_name}' ({i + 1}/{total})"
+                    if any(kw in msg.lower() for kw in ("content_filter", "content management", "content filter")):
+                        raise RuntimeError(
+                            f"Azure content filter blocked summarization of {label}.\n"
+                            f"Check your context_block for language that triggers Azure's content policy.\n"
+                            f"Common triggers: instruction-style phrasing ('you must', 'always', 'ignore', "
+                            f"'override', 'bypass'), OS/shell references, permission-granting language.\n"
+                            f"Reframe as context, not instructions:\n"
+                            f"  Instead of: 'you should pick up files from X'\n"
+                            f"  Write:      'input files are located at X'\n"
+                            f"Original error: {type(exc).__name__}: {msg}\n"
+                            f"See logs/llm_calls.log for the full prompt."
+                        ) from exc
                     raise RuntimeError(
-                        f"Azure content filter blocked summarization of {label}.\n"
-                        f"Check your context_block for language that triggers Azure's content policy.\n"
-                        f"Common triggers: instruction-style phrasing ('you must', 'always', 'ignore', "
-                        f"'override', 'bypass'), OS/shell references, permission-granting language.\n"
-                        f"Reframe as context, not instructions:\n"
-                        f"  Instead of: 'you should pick up files from X'\n"
-                        f"  Write:      'input files are located at X'\n"
-                        f"Original error: {type(exc).__name__}: {msg}\n"
-                        f"See logs/llm_calls.log for the full prompt."
+                        f"Summarization failed for {label}: {exc}"
                     ) from exc
-                raise RuntimeError(
-                    f"Summarization failed for {label}: {exc}"
-                ) from exc
-        return summaries
+                completed += 1
+                if progress_callback:
+                    progress_callback(cluster.cluster_name, completed, total)
+        except RuntimeError:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
+        return results
 
     # ------------------------------------------------------------------
     # Cluster-type dispatch
