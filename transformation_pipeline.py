@@ -148,26 +148,35 @@ class TransformationPipeline:
         # ── 6. Transform each COBOL file (topological order: callees before callers) ──
         transformations: list[PythonTransformationResult] = []
         sorted_cobol = _topological_sort(scanned.cobol, graph)
-        known_interfaces: dict[str, str] = {}  # stem.upper() -> extracted Python interface text
+        # Tracked separately per variant: a dependency's DB and ETL versions can have
+        # different function signatures (e.g. one takes a db session, the other a file
+        # path, or a DB-only helper has no ETL-version counterpart at all). Feeding a
+        # caller's ETL generation the DB version's interface previously caused the LLM
+        # to call functions that only exist in the sibling DB file.
+        known_interfaces_db: dict[str, str] = {}   # stem.upper() -> extracted DB-version interface
+        known_interfaces_etl: dict[str, str] = {}  # stem.upper() -> extracted ETL-version interface
 
         total_cobol = len(sorted_cobol)
         for idx, cobol_path in enumerate(sorted_cobol):
             _progress(f"Transforming {cobol_path.name}", idx + 1, total_cobol)
-            dep_interfaces = _get_dep_interfaces(cobol_path.stem.upper(), graph, known_interfaces)
+            dep_interfaces_db  = _get_dep_interfaces(cobol_path.stem.upper(), graph, known_interfaces_db)
+            dep_interfaces_etl = _get_dep_interfaces(cobol_path.stem.upper(), graph, known_interfaces_etl)
             try:
                 result = self.transformer.transform(
                     cobol_path,
                     dependency_context=dep_context,
                     documentation_context=doc_context[:4_000],
                     system_context=system_map,
-                    known_interfaces=dep_interfaces,
+                    known_interfaces_db=dep_interfaces_db,
+                    known_interfaces_etl=dep_interfaces_etl,
                 )
             except Exception as exc:
                 raise RuntimeError(
                     f"Transformation failed for {cobol_path.name} "
                     f"({idx + 1}/{total_cobol}): {exc}"
                 ) from exc
-            known_interfaces[cobol_path.stem.upper()] = _extract_python_interface(result.python_db_code)
+            known_interfaces_db[cobol_path.stem.upper()]  = _extract_python_interface(result.python_db_code)
+            known_interfaces_etl[cobol_path.stem.upper()] = _extract_python_interface(result.python_etl_code)
             transformations.append(result)
 
         # ── 7. Aggregate ETL operations ──────────────────────────────────────

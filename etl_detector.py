@@ -41,7 +41,7 @@ _READ_TYPES: frozenset[OperationType] = frozenset({
 @dataclass
 class ETLOperation:
     operation_type: OperationType
-    raw_statement: str      # first 200 chars of the matched COBOL text
+    raw_statement: str      # first 400 chars of the matched COBOL text
     table_or_file: str      # table, dataset, or file name (upper-cased)
     line_number: int
     is_read: bool           # True = read; False = write / insert / update / delete
@@ -240,7 +240,7 @@ class ETLDetector:
                 operations.append(
                     ETLOperation(
                         operation_type=op_type,
-                        raw_statement=match.group(0).strip()[:200],
+                        raw_statement=match.group(0).strip()[:400],
                         table_or_file=target,
                         line_number=line_no,
                         is_read=op_type in _READ_TYPES,

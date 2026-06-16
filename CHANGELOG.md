@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-06-16 · `pending` (PROJECT CONTEXT output duplication, SQL column scoping, DB/ETL interface cross-wiring)
+
+### Fixed — PROJECT CONTEXT-named output files were created IN ADDITION TO the default etl_out_*.txt files
+- `cobol_transformer.py` / `_ETL_SYSTEM_PROMPT`: "FILE NAMES ARE DEFAULTS" said an override "instead" of the default, but the LLM was still producing both — interpreting the override as an additional final-delivery file layered on top of the ETL staging convention rather than a replacement. Rewrote the section to state explicitly that there is exactly ONE file per detected operation, an override REPLACES the default (never alongside it), and added matching guidance for when PROJECT CONTEXT names fewer files than there are detected operations
+
+### Fixed — ETL job specs and file schemas were based on the full copybook layout instead of the actual SQL statement's column list
+- `etl_detector.py`: `raw_statement` capture length increased from 200 to 400 chars — long `SELECT`/`WHERE` statements with many columns were being truncated before the column list (and `WHERE` clause) was fully captured
+- `cobol_transformer.py` / `_generate_etl_version`: `read_block`/`write_block` now include each operation's actual `raw_statement` text, not just its generic description. Previously the prompt only said "Read data from table X" with no column information, so when a copybook (with the full A/B/C/D layout) was also in scope, the LLM defaulted to validating against the copybook's full field set instead of the subset an individual query actually selects (e.g. `SELECT B, C FROM X` when the copybook defines A, B, C, D)
+- `cobol_transformer.py` / `_ETL_SYSTEM_PROMPT`: added an explicit rule under MODULE-LEVEL ETL CONTRACT — base every schema/column-mapping line on the actual statement shown for that operation, using the copybook only for field types/lengths, never for which columns to include
+
+### Fixed — ETL-version code was calling functions that only exist in the sibling DB-version file
+- `transformation_pipeline.py`: dependency interfaces were tracked in a single `known_interfaces` dict populated only from `result.python_db_code`, then reused for BOTH the DB and ETL generation calls of every caller. A dependency's DB and ETL versions can have different function signatures (or a function may not exist at all in one variant), so an ETL file generating against another module's DB-version interface would call a function with no ETL-version counterpart
+- Split into `known_interfaces_db` / `known_interfaces_etl`, each populated from the matching variant's generated code; `_get_dep_interfaces()` is now called twice (once per dict) so each generation call only ever sees interfaces extracted from the same variant
+- `cobol_transformer.py`: `transform()` parameter `known_interfaces: str` split into `known_interfaces_db: str` / `known_interfaces_etl: str`, routed to `_generate_db_version`/`_generate_etl_version` (and the chunked path) respectively — the only caller (`transformation_pipeline.py`) updated to match
+
+---
+
 ## [Unreleased] — 2026-06-16 · `pending` (deterministic completeness check + targeted re-prompt)
 
 ### Added — Post-generation completeness check against static-analysis ground truth

@@ -188,11 +188,19 @@ FILE FORMAT — ALL ETL FILES USE THIS FORMAT UNLESS PROJECT CONTEXT BELOW OVERR
 - Example row: POLICY_ID|CUSTOMER_ID|EFFECTIVE_DATE|AMOUNT
                10042|9981|2026-01-15|1250.00
 
-FILE NAMES ARE DEFAULTS
+FILE NAMES ARE DEFAULTS — AN OVERRIDE REPLACES THE DEFAULT, IT NEVER ADDS TO IT
 The read/write file names given in the task message (etl_in_<TABLE>.txt / etl_out_<TABLE>.txt)
-are DEFAULTS assigned by static analysis, not fixed requirements. If PROJECT CONTEXT below
-names an exact file for a given table or data source, use that exact name and format
-instead — PROJECT CONTEXT always overrides the defaults shown in the task message.
+are DEFAULTS assigned by static analysis, not fixed requirements, and NOT a second mandatory
+file to produce alongside whatever PROJECT CONTEXT specifies. There is exactly ONE file per
+detected READ or WRITE operation — never two.
+- If PROJECT CONTEXT below names an exact file/path for a given table or data source, write
+  ONLY that file for that operation. Do not also create the default-named etl_in_*/etl_out_*
+  file "just in case" or as a staging copy — that produces duplicate output for a single
+  COBOL operation, which is a bug, not a safety net.
+- If PROJECT CONTEXT names fewer files than there are detected operations, match each named
+  file to the operation it most plausibly corresponds to (by table name, column overlap, or
+  stated purpose) and use the default name only for operations PROJECT CONTEXT left
+  unaddressed — do not invent an extra file for an operation PROJECT CONTEXT already covered.
 
 ETL INPUT FILES (data provided BY the ETL environment BEFORE this module runs):
 - For every database READ in the original COBOL, read from the input file named in the task
@@ -237,6 +245,13 @@ the actual file names you used (defaults or PROJECT CONTEXT overrides):
     #               INSERT/UPDATE/DELETE <table> using the following column mapping:
     #               file_col -> table_col, ...
     # ------------------------------------------------------------------------
+Base every "schema:" line and every "SELECT <columns>" / column mapping above on the ACTUAL
+SQL/CICS statement shown for that operation in the task message — NOT on the full record
+layout of any imported copybook. A copybook commonly defines more fields (A, B, C, D) than
+a given query actually selects (e.g. SELECT B, C FROM X) — only the columns the real
+statement reads or writes belong in this file's schema, contract, and validation logic.
+Reference the copybook for field TYPES/lengths of those specific columns, not for which
+columns to include.
 
 ETL FILE PROCESSING ASSUMPTIONS
 These are system-level defaults. If PROJECT CONTEXT below explicitly contradicts any
@@ -349,7 +364,8 @@ for the missing portion."""
         dependency_context: str = "",
         documentation_context: str = "",
         system_context: str = "",
-        known_interfaces: str = "",
+        known_interfaces_db: str = "",
+        known_interfaces_etl: str = "",
     ) -> PythonTransformationResult:
         """Transform one COBOL file into both Python variants.
 
@@ -357,10 +373,15 @@ for the missing portion."""
         still run and the error is embedded as a comment in the output file
         rather than crashing the pipeline.
 
-        system_context:    a map of all programs in the system with their Python
-                           module names — used to generate correct inter-module imports.
-        known_interfaces:  extracted function signatures of already-transformed
-                           dependencies so the LLM uses exact call signatures.
+        system_context:       a map of all programs in the system with their Python
+                              module names — used to generate correct inter-module imports.
+        known_interfaces_db:  extracted function signatures from dependencies' DB-version
+                              code — used only when generating THIS file's DB version.
+        known_interfaces_etl: extracted function signatures from dependencies' ETL-version
+                              code — used only when generating THIS file's ETL version.
+                              A dependency's DB and ETL versions can have different function
+                              signatures (e.g. one takes a db session, the other a file path),
+                              so the two variants must never be cross-wired.
         """
         source = _read_cobol(cobol_path)
         # ETL detection always runs on the full source (regex, no token limit)
@@ -374,19 +395,19 @@ for the missing portion."""
         common_args = (cobol_path.name, dependency_context, documentation_context, system_context)
 
         if is_chunked:
-            db_code  = self._transform_chunked("db",  chunks, *common_args, etl_ops=etl_ops, known_interfaces=known_interfaces)
-            etl_code = self._transform_chunked("etl", chunks, *common_args, etl_ops=etl_ops, known_interfaces=known_interfaces)
+            db_code  = self._transform_chunked("db",  chunks, *common_args, etl_ops=etl_ops, known_interfaces=known_interfaces_db)
+            etl_code = self._transform_chunked("etl", chunks, *common_args, etl_ops=etl_ops, known_interfaces=known_interfaces_etl)
         else:
             src = source[: self._MAX_SOURCE_CHARS]
             db_code = self._call_llm(
                 self._generate_db_version,
-                src, *common_args, known_interfaces, was_truncated,
+                src, *common_args, known_interfaces_db, was_truncated,
                 label="DB version",
             )
             etl_code = self._call_llm(
                 self._generate_etl_version,
                 src, cobol_path.name, dependency_context, documentation_context,
-                etl_ops, system_context, known_interfaces, was_truncated,
+                etl_ops, system_context, known_interfaces_etl, was_truncated,
                 label="ETL version",
             )
 
@@ -823,25 +844,30 @@ Convert this COBOL file to the DATABASE VERSION, following the system rules you 
 
         read_block = (
             "\n".join(
-                f"  Line {op.line_number}: [{op.operation_type.value}] {op.description}"
-                f"  → default input file: etl_in_{op.table_or_file.lower()}.txt"
+                f"  Line {op.line_number}: [{op.operation_type.value}] {op.description}\n"
+                f"    Actual statement: {op.raw_statement}\n"
+                f"    → default input file: etl_in_{op.table_or_file.lower()}.txt"
                 for op in read_ops
             ) or "  (none detected by static analysis)"
         )
         write_block = (
             "\n".join(
-                f"  Line {op.line_number}: [{op.operation_type.value}] {op.description}"
-                f"  → default output file: etl_out_{op.table_or_file.lower()}.txt"
+                f"  Line {op.line_number}: [{op.operation_type.value}] {op.description}\n"
+                f"    Actual statement: {op.raw_statement}\n"
+                f"    → default output file: etl_out_{op.table_or_file.lower()}.txt"
                 for op in write_ops
             ) or "  (none detected by static analysis)"
         )
 
         prompt = f"""COBOL file: {filename}{dep_block}{doc_block}{sys_block}{iface_block}
 
-Database READ operations detected (default input files — your PROJECT CONTEXT instructions override these if they name specific files):
+Database READ operations detected (default input files — your PROJECT CONTEXT instructions override these if they name specific files). The "Actual statement" line is the real
+COBOL/SQL text — base the input file's schema and any ETL JOB SPECIFICATION on EXACTLY the
+columns that statement reads, not on the full record layout of any imported copybook:
 {read_block}
 
-Database WRITE operations detected (default output files — your PROJECT CONTEXT instructions override these if they name specific files):
+Database WRITE operations detected (default output files — your PROJECT CONTEXT instructions override these if they name specific files). Same rule: base the output file's schema on
+EXACTLY the columns the "Actual statement" writes/updates:
 {write_block}
 
 COBOL SOURCE:{trunc_note}
